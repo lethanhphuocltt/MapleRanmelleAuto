@@ -1,7 +1,7 @@
 <Configuration>
   <VGpu>Enable</VGpu>
   <Networking>Enable</Networking>
-  <MemoryInMB>8192</MemoryInMB>
+  <MemoryInMB>12288</MemoryInMB>
   <MappedFolders>
     <MappedFolder>
       <HostFolder>E:\CleanSetupv412</HostFolder>

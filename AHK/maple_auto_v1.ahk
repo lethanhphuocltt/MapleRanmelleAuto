@@ -172,8 +172,22 @@ ReloginOn     := Cfg("Relogin", "Enabled") = "1"
 ReLauncherExe := Trim(Cfg("Relogin", "LauncherExe"))
 PlaceWindows  := Cfg("Relogin", "PlaceWindows") != "0"
 ReLauncher    := Trim(Cfg("Relogin", "LauncherPath"))
-if ReLauncher = ""
-    ReLauncher := RegExReplace(A_ScriptDir, "\\[^\\]+$") "\" ReLauncherExe
+if ReLauncher = "" || !FileExist(ReLauncher) {
+    ; Tự tìm launcher: thư mục cha, rồi lên tối đa 4 cấp (khi chạy trong thư mục repo đặt lồng trong thư mục game)
+    found := ""
+    d := A_ScriptDir
+    loop 4 {
+        d := RegExReplace(d, "\\[^\\]+$")
+        if FileExist(d "\" ReLauncherExe) {
+            found := d "\" ReLauncherExe
+            break
+        }
+    }
+    if found != ""
+        ReLauncher := found
+    else if ReLauncher = ""
+        ReLauncher := RegExReplace(A_ScriptDir, "\\[^\\]+$") "\" ReLauncherExe
+}
 ReLostSec     := Max(3, Integer(Cfg("Relogin", "LostSec")))
 ReMaxTries    := Max(1, Integer(Cfg("Relogin", "MaxTries")))
 ReAttemptMs   := Max(60, Integer(Cfg("Relogin", "AttemptSec"))) * 1000
@@ -212,6 +226,280 @@ DLog(msg) {
         }
     }
 }
+; ===== Chẩn đoán hiệu năng (chỉ chạy khi bật "Ghi log debug" trong F5) =====
+; Mỗi 30 giây ghi 2 dòng "PERF" vào debug_v1.log: thời gian tốn cho từng việc, CPU, RAM, độ trễ vòng chính.
+; Khi màn hình / DPI / cỡ cửa sổ game đổi thì ghi lại các dòng "ENV" (thông tin môi trường).
+PerfStat := Map()           ; tên -> [số lần, tổng ms, max ms]
+PerfRecent := []            ; các việc chậm (> 500ms) gần đây, để gắn vào dòng "VÒNG CHÍNH TRỄ"
+PerfMaxGap := 0
+PerfLastSlowPx := 0
+PerfReportAt := A_TickCount
+PerfSig := ""
+PerfReports := 0
+PerfFreq := 0
+DllCall("QueryPerformanceFrequency", "Int64*", &PerfFreq)
+PerfPrev := Map()
+
+PerfNow() {
+    c := 0
+    DllCall("QueryPerformanceCounter", "Int64*", &c)
+    return c * 1000.0 / PerfFreq
+}
+
+PerfAdd(name, ms) {
+    if !PerfStat.Has(name)
+        PerfStat[name] := [0, 0.0, 0.0]
+    a := PerfStat[name]
+    a[1] += 1
+    a[2] += ms
+    if ms > a[3]
+        a[3] := ms
+    if ms > 500 && name != "loop" {
+        PerfRecent.Push(name " " Round(ms) "ms lúc " FormatTime(, "HH:mm:ss"))
+        if PerfRecent.Length > 5
+            PerfRecent.RemoveAt(1)
+    }
+}
+
+; Đọc màu 1 điểm, đo thời gian (kết quả giống hệt PixelGetColor)
+PxGet(x, y) {
+    if !DebugOn
+        return PixelGetColor(x, y)
+    global PerfLastSlowPx
+    t := PerfNow()
+    try {
+        c := PixelGetColor(x, y)
+    } catch as e {
+        PerfAdd("pixel_lỗi", PerfNow() - t)
+        throw e
+    }
+    d := PerfNow() - t
+    PerfAdd("pixel", d)
+    if d > 300 && A_TickCount - PerfLastSlowPx > 2000 {
+        PerfLastSlowPx := A_TickCount
+        DLog("CHẬM: PixelGetColor(" x "," y ") mất " Round(d) "ms")
+    }
+    return c
+}
+
+PerfRun(name, fn) {
+    if !DebugOn {
+        fn()
+        return
+    }
+    t := PerfNow()
+    try
+        fn()
+    finally
+        PerfAdd(name, PerfNow() - t)
+}
+TimedFn(name, fn) => (*) => PerfRun(name, fn)
+
+DpiAwareName() {
+    try {
+        ctx := DllCall("User32\GetThreadDpiAwarenessContext", "Ptr")
+        a := DllCall("User32\GetAwarenessFromDpiAwarenessContext", "Ptr", ctx, "Int")
+        return a = 2 ? "Per-Monitor (2)" : a = 1 ? "System (1) - toạ độ lệch nếu màn khác DPI" : a = 0 ? "Unaware (0)" : a
+    }
+    return "?"
+}
+
+MonDpi(x, y) {
+    try {
+        pt := (y << 32) | (x & 0xFFFFFFFF)
+        hm := DllCall("User32\MonitorFromPoint", "Int64", pt, "UInt", 2, "Ptr")
+        dx := 0, dy := 0
+        DllCall("Shcore\GetDpiForMonitor", "Ptr", hm, "Int", 0, "UInt*", &dx, "UInt*", &dy)
+        return dx
+    }
+    return 0
+}
+
+; Chỉ số màn hình chứa tâm cửa sổ game (0 nếu không rõ)
+GameMonitor(hwnd) {
+    try {
+        WinGetPos &wx, &wy, &ww, &wh, hwnd
+        mx := wx + ww // 2
+        my := wy + wh // 2
+        loop MonitorGetCount() {
+            MonitorGet A_Index, &l, &t, &r, &b
+            if mx >= l && mx < r && my >= t && my < b
+                return A_Index
+        }
+    }
+    return 0
+}
+
+; Chữ ký "môi trường" của game: đổi thì ghi lại ENV
+PerfEnvSig() {
+    h := GameHwnd()
+    if !h
+        return "không có game"
+    try {
+        WinGetPos &wx, &wy, &ww, &wh, h
+        WinGetClientPos , , &cw, &ch, h
+        m := GameMonitor(h)
+        return wx "," wy "," ww "x" wh " client " cw "x" ch " màn " m " dpi " MonDpi(wx + ww // 2, wy + wh // 2) " n=" MonitorGetCount()
+    }
+    return "?"
+}
+
+EnvDump() {
+    try {
+        DLog("ENV: AHK " A_AhkVersion (A_PtrSize = 8 ? " 64bit" : " 32bit") "  Windows " A_OSVersion "  user=" A_UserName "  số lõi CPU=" EnvGet("NUMBER_OF_PROCESSORS") "  admin=" A_IsAdmin)
+        DLog("ENV: DPI hệ thống=" A_ScreenDPI "  chế độ DPI của script=" DpiAwareName() "  màn hình chính=" MonitorGetPrimary() "  số màn hình=" MonitorGetCount() "  A_ScreenWidth/Height=" A_ScreenWidth "x" A_ScreenHeight)
+        loop MonitorGetCount() {
+            MonitorGet A_Index, &l, &t, &r, &b
+            dpi := MonDpi(l + 1, t + 1)
+            DLog("ENV: màn " A_Index ": " (r - l) "x" (b - t) " tại (" l "," t ")  DPI=" dpi " (" Round(dpi / 96 * 100) "%)  tên=" MonitorGetName(A_Index))
+        }
+        h := GameHwnd()
+        if !h {
+            DLog("ENV: chưa có cửa sổ game")
+            return
+        }
+        WinGetPos &wx, &wy, &ww, &wh, h
+        WinGetClientPos &cx, &cy, &cw, &ch, h
+        k := Scale(cw)
+        m := GameMonitor(h)
+        DLog("ENV: game cửa sổ " ww "x" wh " tại (" wx "," wy ")  vùng client " cw "x" ch " tại (" cx "," cy ")  hệ số k=" Round(k, 3) " (GameResW=" GameResW ")  tỉ lệ client " Round(cw / Max(1, ch), 3) "  nằm trên màn " m "  DPI màn đó=" MonDpi(wx + ww // 2, wy + wh // 2) "  trạng thái=" WinGetMinMax(h) "  PID=" WinGetPID(h))
+        DLog("ENV: tâm client (" Round(cx + cw / 2) "," Round(cy + ch / 2) ")  ô quickslot đầu tiên cách mép phải " QS_X0 " px, mép dưới " QS_Y1 "/" QS_Y2 " px (khi k=1)")
+    } catch as e {
+        DLog("ENV: lỗi khi thu thập: " e.Message)
+    }
+    PxBench("env")
+}
+
+; Đo tốc độ thao tác điểm ảnh / cửa sổ, tách riêng để biết cái nào chậm
+PxBench(label) {
+    h := GameHwnd()
+    try {
+        x := 5, y := 5, gx := 0, gy := 0
+        if h {
+            WinGetClientPos &cx, &cy, &cw, &ch, h
+            gx := cx + cw // 2, gy := cy + ch // 2
+        }
+        t1 := 0, m1 := 0, t2 := 0, m2 := 0, t3 := 0, m3 := 0, t4 := 0, m4 := 0
+        loop 10 {
+            t := PerfNow()
+            PixelGetColor(x, y)
+            d := PerfNow() - t, t1 += d, m1 := Max(m1, d)
+            if h {
+                t := PerfNow()
+                PixelGetColor(gx, gy)
+                d := PerfNow() - t, t2 += d, m2 := Max(m2, d)
+                t := PerfNow()
+                WinGetClientPos &a, &b, &c, &e, h
+                d := PerfNow() - t, t3 += d, m3 := Max(m3, d)
+            }
+            t := PerfNow()
+            WinActive(GameWin)
+            d := PerfNow() - t, t4 += d, m4 := Max(m4, d)
+        }
+        DLog("BENCH " label ": đọc 1 điểm ở góc màn hình tb=" Round(t1 / 10, 1) "ms max=" Round(m1, 1) "  | giữa game tb=" Round(t2 / 10, 1) "ms max=" Round(m2, 1) "  | WinGetClientPos tb=" Round(t3 / 10, 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / 10, 2) "ms max=" Round(m4, 1))
+    }
+}
+
+PerfFirstEnv() {
+    global PerfSig
+    PerfSig := PerfEnvSig()
+    EnvDump()
+}
+
+PerfProcTimes(h) {
+    c := 0, e := 0, k := 0, u := 0
+    if !DllCall("GetProcessTimes", "Ptr", h, "Int64*", &c, "Int64*", &e, "Int64*", &k, "Int64*", &u)
+        return -1
+    return k + u
+}
+
+PerfReport() {
+    global PerfStat, PerfMaxGap, PerfReportAt, PerfSig, PerfReports, PerfPrev
+    now := A_TickCount
+    wall := Max(1, now - PerfReportAt)
+    PerfReportAt := now
+    PerfReports += 1
+    ; CPU: máy / script / game (tính theo % của 1 lõi cho tiến trình, % toàn máy cho máy)
+    idle := 0, kern := 0, user := 0
+    DllCall("GetSystemTimes", "Int64*", &idle, "Int64*", &kern, "Int64*", &user)
+    sysTxt := "?"
+    if PerfPrev.Has("idle") {
+        dt := (kern + user) - PerfPrev["tot"]
+        if dt > 0
+            sysTxt := Round((1 - (idle - PerfPrev["idle"]) / dt) * 100) "%"
+    }
+    PerfPrev["idle"] := idle, PerfPrev["tot"] := kern + user
+    selfTxt := "?", gameTxt := "?"
+    s := PerfProcTimes(DllCall("GetCurrentProcess", "Ptr"))
+    if s >= 0 {
+        if PerfPrev.Has("self")
+            selfTxt := Round((s - PerfPrev["self"]) / (wall * 100)) "%"
+        PerfPrev["self"] := s
+    }
+    gh := GameHwnd()
+    if gh {
+        try {
+            hp := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", WinGetPID(gh), "Ptr")
+            if hp {
+                g := PerfProcTimes(hp)
+                DllCall("CloseHandle", "Ptr", hp)
+                if g >= 0 {
+                    if PerfPrev.Has("game")
+                        gameTxt := Round((g - PerfPrev["game"]) / (wall * 100)) "%"
+                    PerfPrev["game"] := g
+                }
+            }
+        }
+    }
+    mem := Buffer(64, 0)
+    NumPut("UInt", 64, mem)
+    DllCall("GlobalMemoryStatusEx", "Ptr", mem)
+    ramTxt := NumGet(mem, 4, "UInt") "% dùng, trống " (NumGet(mem, 16, "UInt64") // 1048576) "MB"
+    DLog("PERF " Round(wall / 1000) "s: vòng chính trễ nhất " PerfMaxGap "ms | CPU máy " sysTxt "  script " selfTxt " (của 1 lõi)  game " gameTxt " (của 1 lõi) | RAM " ramTxt " | game " (IsGameActive() ? "đang focus" : "KHÔNG focus") " | bản script=" InstanceCount() " | pause=" (Paused() ? "có" : "không"))
+    line := ""
+    for name, a in PerfStat
+        line .= name ": n=" a[1] " tb=" Round(a[2] / a[1], 1) "ms max=" Round(a[3]) "ms chiếm=" Round(a[2] / wall * 100) "%  | "
+    DLog("PERF chi tiết: " (line = "" ? "(chưa có hoạt động)" : RTrim(line, " |")))
+    PerfStat := Map()
+    PerfMaxGap := 0
+    sig := PerfEnvSig()
+    if sig != PerfSig {
+        DLog("ENV đổi: [" PerfSig "] -> [" sig "]")
+        PerfSig := sig
+        EnvDump()
+    } else if Mod(PerfReports, 5) = 0 {
+        PxBench("định kỳ")
+    }
+}
+
+; Khi thấy không có bảng buff: ghi toạ độ + màu các điểm dò để biết dò trượt vì sai vị trí hay sai màu
+BuffSampleDump() {
+    h := GameHwnd()
+    if !h
+        return "không có cửa sổ game"
+    WinGetClientPos &cx, &cy, &cw, &ch, h
+    k := Scale(cw)
+    mx := cx + cw / 2
+    my := cy + ch / 2
+    out := "client " cw "x" ch " k=" Round(k, 3) " tâm (" Round(mx) "," Round(my) ")  loại1 [cần ~40,140,170]: "
+    try {
+        for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
+            x := Round(mx + p[1] * k), y := Round(my + p[2] * k)
+            c := PxGet(x, y)
+            out .= "(" x "," y ")=" ((c >> 16) & 0xFF) "," ((c >> 8) & 0xFF) "," (c & 0xFF) "  "
+        }
+        out .= " loại2 [cần ~44,165,186]: "
+        for p in [[-140, -45], [140, -45]] {
+            x := Round(mx + p[1] * k), y := Round(my + p[2] * k)
+            c := PxGet(x, y)
+            out .= "(" x "," y ")=" ((c >> 16) & 0xFF) "," ((c >> 8) & 0xFF) "," (c & 0xFF) "  "
+        }
+    } catch as e {
+        out .= " LỖI " e.Message
+    }
+    return out
+}
+
 SlowRetryMs   := Integer(Cfg("Detect", "SlowRetryMs"))
 RetryGapMs    := Integer(Cfg("Detect", "RetryGapMs"))
 MinGapMs      := Integer(Cfg("Detect", "MinGapMs"))
@@ -244,6 +532,8 @@ loop MaxSkillRows {
         m["rep"] := true
     if f.Length >= 6 && Trim(f[6]) = "1"
         m["nostop"] := true         ; ấn skill này mà KHÔNG nhả phím chính (V) và không chờ
+    if f.Length >= 7 && Trim(f[7]) = "0"
+        continue                    ; cột "Bật" bỏ chọn: giữ dòng trong ini nhưng không ấn skill này
     Skills.Push(m)
 }
 
@@ -406,7 +696,7 @@ MakeScrollable(g) {
         g.Show()
         return
     }
-    g.Opt("+VScroll")
+    g.Opt("+0x200000")   ; WS_VSCROLL (v2 không có tùy chọn tên "VScroll" cho Gui)
     ScrollGuis[g.Hwnd] := Map("content", ch, "view", view)
     ScrollSetInfo(g.Hwnd, ch, view, 0)
     g.Show("w" cw " h" view " Center")
@@ -552,7 +842,8 @@ ShowSettings(*) {
     GuiCtl["UseSlotCheck"].Value := UseSlotCheck ? 1 : 0
 
     g.AddGroupBox("x" (gx + 576) " y" gy " w560 h" (MaxSkillRows * 24 + 78) " Section", "Danh sách skill (theo thứ tự ưu tiên)")
-    g.AddText("xs+12 ys+20 w60", "Phím")
+    g.AddText("xs+12 ys+20 w28", "Bật")
+    g.AddText("x+4 yp w60", "Phím")
     g.AddText("x+4 yp w80", "Cooldown (s)")
     g.AddText("x+4 yp w100", "Hàng ô (0/1/2)")
     g.AddText("x+4 yp w70", "Cột ô (từ 0)")
@@ -562,10 +853,12 @@ ShowSettings(*) {
     loop MaxSkillRows {
         line := IniRead(IniFile, "Skills", "Skill" A_Index, "")
         f := StrSplit(line, "|")
-        while f.Length < 6
+        while f.Length < 7
             f.Push("")
         yy := 40 + (A_Index - 1) * 24
-        e1 := g.AddEdit("xs+12 ys+" yy " w60", f[1])
+        c0 := g.AddCheckbox("xs+12 ys+" (yy + 3) " w24", "")
+        c0.Value := Trim(f[7]) = "0" ? 0 : 1      ; không ghi/trống = bật
+        e1 := g.AddEdit("x+4 yp-3 w60", f[1])
         e2 := g.AddEdit("x+4 yp w80", f[2])
         e3 := g.AddEdit("x+4 yp w100", f[3])
         e4 := g.AddEdit("x+4 yp w70", f[4])
@@ -573,9 +866,9 @@ ShowSettings(*) {
         c5.Value := Trim(f[5]) = "1" ? 1 : 0
         c6 := g.AddCheckbox("x+4 yp w100", "")
         c6.Value := Trim(f[6]) = "1" ? 1 : 0
-        GuiCtl["rows"].Push([e1, e2, e3, e4, c5, c6])
+        GuiCtl["rows"].Push([e1, e2, e3, e4, c5, c6, c0])
     }
-    g.AddText("xs+12 ys+" (MaxSkillRows * 24 + 46) " w540", "Hàng ô: 0 = không đọc ô (dùng bộ đếm), 1 = hàng trên của quickslot, 2 = hàng dưới. Để trống phím = bỏ dòng. Không dừng V: ấn skill đó mà vẫn giữ phím chính.")
+    g.AddText("xs+12 ys+" (MaxSkillRows * 24 + 46) " w540", "Hàng ô: 0 = không đọc ô (dùng bộ đếm), 1 = hàng trên của quickslot, 2 = hàng dưới. Để trống phím = bỏ dòng. Không dừng V: ấn skill đó mà vẫn giữ phím chính. Bật: bỏ chọn = tạm tắt skill đó (vẫn giữ dòng cấu hình).")
     g.AddGroupBox("xs y+16 w560 h172 Section", "Tự đăng nhập lại khi văng game (bản v1)")
     GuiCtl["ReOn"] := g.AddCheckbox("xs+12 ys+20 w536", "Bật: game văng thì mở launcher (nếu chưa có), bấm PLAY, chọn kênh, Log In")
     GuiCtl["ReOn"].Value := ReloginOn ? 1 : 0
@@ -682,7 +975,7 @@ SaveSettings(*) {
             MsgBox "Dòng skill '" key "' có giá trị không hợp lệ.`nCooldown phải > 0, hàng ô là 0/1/2, cột ô là số nguyên >= 0.", "Maple Auto", "Icon!"
             return
         }
-        lines.Push(key "|" cd "|" row "|" col "|" (r[5].Value ? 1 : 0) "|" (r[6].Value ? 1 : 0))
+        lines.Push(key "|" cd "|" row "|" col "|" (r[5].Value ? 1 : 0) "|" (r[6].Value ? 1 : 0) "|" (r[7].Value ? 1 : 0))
     }
     IniWrite GuiCtl["ShowHud"].Value, IniFile, "General", "ShowHud"
     IniWrite GuiCtl["ReOn"].Value, IniFile, "Relogin", "Enabled"
@@ -727,7 +1020,14 @@ A_TrayMenu.Add("Hướng dẫn", (*) => OpenGuide())
 if FirstRun
     SetTimer ShowSettings, -500
 
-IsGameActive() => WinActive(GameWin) || WinActive(GameWin2)
+IsGameActive() {
+    if !DebugOn
+        return WinActive(GameWin) || WinActive(GameWin2)
+    t := PerfNow()
+    r := WinActive(GameWin) || WinActive(GameWin2)
+    PerfAdd("winactive", PerfNow() - t)
+    return r
+}
 
 ; Lỗi trong timer: không hiện hộp thoại (có thể bị game che và làm treo script) mà ghi file + tooltip
 LastErr := ""
@@ -849,14 +1149,14 @@ KeepFocus() {
     SoftActivate(hwnd)
 }
 
-; Đưa cửa sổ lên trước KHÔNG CHẶN: WinActivate/WinRestore gắn luồng và chờ game xử lý tin nhắn, nếu game đang bận (tải map)
-; thì cả script bị treo. Hai lệnh dưới đây trả về ngay.
+; CHỈ focus (nhận phím) KHÔNG CHẶN: WinActivate gắn luồng và chờ game xử lý tin nhắn, nếu game đang bận (tải map)
+; thì cả script bị treo. Không khôi phục cửa sổ thu nhỏ / không hiện / không "luôn trên cùng": chỉ xin focus rồi trả về ngay.
 SoftActivate(hwnd) {
     try {
         if WinGetMinMax(hwnd) = -1
-            DllCall("ShowWindowAsync", "Ptr", hwnd, "Int", 9)
+            return
     }
-    DllCall("SwitchToThisWindow", "Ptr", hwnd, "Int", 1)
+    DllCall("SwitchToThisWindow", "Ptr", hwnd, "Int", 0)
 }
 
 HoldMain() {
@@ -894,7 +1194,7 @@ SlotSample(s) {
     out := []
     try {
         for p in BandPts {
-            c := PixelGetColor(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
+            c := PxGet(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
             out.Push([(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF])
         }
     } catch {
@@ -939,7 +1239,10 @@ SlotState(s) {
     key := s["key"]
     if !Base.Has(key)
         return -1
+    t := DebugOn ? PerfNow() : 0
     cur := SlotSample(s)
+    if DebugOn
+        PerfAdd("đọc_ô(" key ")", PerfNow() - t)
     if !IsObject(cur)
         return -1
     return SampleDist(cur, Base[key]) <= ReadyDist ? 1 : 0
@@ -1109,9 +1412,7 @@ CaptureOne(i, *) {
     if IsObject(SettingsGui)
         try SettingsGui.Hide()
     ColorGui.Hide()
-    if WinGetMinMax(hwnd) = -1
-        WinRestore hwnd
-    WinActivate hwnd
+    SoftActivate(hwnd)
     Sleep 400
     loop 3 {
         ToolTip "Lấy màu phím " StrUpper(s["key"]) " sau " (4 - A_Index) " giây... (skill phải đang SẴN SÀNG)", 20, 20, 4
@@ -1150,10 +1451,10 @@ SaveOne(i, *) {
 PanicStop() {
     global Enabled
     Enabled := false
-    SetTimer Loop1, 0
-    SetTimer UpdateHud, 0
-    SetTimer ScanSlots, 0
-    SetTimer ScanFlash, 0
+    SetTimer TmrLoop1, 0
+    SetTimer TmrHud, 0
+    SetTimer TmrScan, 0
+    SetTimer TmrFlash, 0
     ToolTip "", , , 2
     Send "{" MainKey " up}"
     ToolTip "ĐÃ DỪNG HẲN SCRIPT (Ctrl+F1)`nBấm đúp maple_auto.exe để chạy lại"
@@ -1203,6 +1504,8 @@ ScanSlotsInner() {
     }
     ScanMs := A_TickCount - t0
     ScanAt := A_TickCount
+    if DebugOn
+        PerfAdd("quét_ô_cả_lượt", ScanMs)
     if ScanMs > 500
         DLog("QUÉT Ô chậm: " ScanMs "ms")
 }
@@ -1215,14 +1518,33 @@ LogPress(key, how) {
         PressLog.Pop()
 }
 
+; Vị trí góc trên-phải của màn hình đang chứa cửa sổ game (tooltip rộng w px đặt sát mép phải)
+HudPos(hwnd, w, &x, &y) {
+    x := A_ScreenWidth - w - 10
+    y := 10
+    try {
+        WinGetPos &wx, &wy, &ww, &wh, hwnd
+        mx := wx + ww // 2
+        my := wy + wh // 2
+        loop MonitorGetCount() {
+            MonitorGet A_Index, &l, &t, &r, &b
+            if mx >= l && mx < r && my >= t && my < b {
+                x := r - w - 10
+                y := t + 10
+                break
+            }
+        }
+    }
+}
+
 ; Bảng trạng thái: phím nào sẵn sàng / đang hồi + 10 phím vừa ấn
 UpdateHud() {
     if Paused() {
         if UserPaused && Enabled && ShowHud && !SettingsBusy && !GuiVisible(SettingsGui) && !GuiVisible(ColorGui) {
             h := GameHwnd()
             if h {
-                WinGetClientPos &cx, &cy, &cw, &ch, h
-                ToolTip "⏸ TẠM DỪNG - ấn " ToggleKey " để tiếp tục", cx + cw // 2 - 130, cy + 70, 2
+                HudPos(h, 330, &hx, &hy)
+                ToolTip "⏸ TẠM DỪNG - ấn " ToggleKey " để tiếp tục", hx, hy, 2
                 return
             }
         }
@@ -1291,7 +1613,8 @@ UpdateHud() {
         for line in PressLog
             txt .= line "`n"
     }
-    ToolTip RTrim(txt, "`n"), cx + cw // 2 - 130, cy + 70, 2
+    HudPos(hwnd, 460, &hx, &hy)
+    ToolTip RTrim(txt, "`n"), hx, hy, 2
 }
 
 ; Nháy trắng lúc hồi chiêu xong: cả 2 điểm trên dải mép dưới ô đều gần như trắng
@@ -1302,7 +1625,7 @@ SlotIsWhite(s) {
     y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * k
     try {
         for p in [[-9, 13], [4, 13]] {
-            c := PixelGetColor(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
+            c := PxGet(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
             r := (c >> 16) & 0xFF
             g := (c >> 8) & 0xFF
             b := c & 0xFF
@@ -1439,7 +1762,7 @@ SkillStuckRecover(names) {
 ; Loại bảng đang hiện: 1 = bảng "Buff Sequence" (Use All Buffs / Use Unapplied Buffs), 2 = bảng "Use the new EXP Buff Coupon?"
 ; (nhỏ hơn, nút Confirm/Cancel), 0 = không có bảng. Nhận diện bằng màu nền xanh ngọc của bảng ở các điểm hai bên.
 PixelRGB(x, y) {
-    c := PixelGetColor(x, y)
+    c := PxGet(x, y)
     return [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF]
 }
 
@@ -1448,6 +1771,8 @@ BuffDialogKind() {
     r := BuffDialogKindRaw()
     global LastDlgKind
     d := A_TickCount - t0
+    if DebugOn
+        PerfAdd("dò_bảng_buff", d)
     if r != LastDlgKind || d > 400
         DLog("DÒ BẢNG -> loại " r " (mất " d "ms)" (r != LastDlgKind ? " [đổi từ " LastDlgKind "]" : ""))
     LastDlgKind := r
@@ -1516,7 +1841,7 @@ BuffFindButton(&x, &y, &hits) {
     teal := 0
     try {
         for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-            c := PixelGetColor(Round(mx + p[1] * k), Round(my + p[2] * k))
+            c := PxGet(Round(mx + p[1] * k), Round(my + p[2] * k))
             r := (c >> 16) & 0xFF, g := (c >> 8) & 0xFF, b := c & 0xFF
             if Abs(r - 40) <= 24 && Abs(g - 140) <= 34 && Abs(b - 170) <= 34
                 teal += 1
@@ -1745,9 +2070,7 @@ CaptureBtnPos(*) {
         ReleaseMain()
     if IsObject(SettingsGui)
         try SettingsGui.Hide()
-    if WinGetMinMax(hwnd) = -1
-        WinRestore hwnd
-    WinActivate hwnd
+    SoftActivate(hwnd)
     px := 0, py := 0, got := false
     t0 := A_TickCount
     while A_TickCount - t0 < 40000 {
@@ -1806,7 +2129,7 @@ DebugBuff() {
     txt := "Vùng game " cw "x" ch "  hệ số " Round(k, 3) "`nLoại bảng: " BuffDialogKind() " (1 = Buff Sequence, 2 = EXP Coupon, 0 = không có)`nNút Use Unapplied Buffs: " (found ? "thấy ở (" bx "," by ")" : "không thấy") "`n"
     txt .= "Điểm nền (cần ~ 40,140,170; đạt " hits "/4): "
     for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-        c := PixelGetColor(Round(mx + p[1] * k), Round(my + p[2] * k))
+        c := PxGet(Round(mx + p[1] * k), Round(my + p[2] * k))
         txt .= ((c >> 16) & 0xFF) "," ((c >> 8) & 0xFF) "," (c & 0xFF) "  "
     }
     ToolTip txt, cx + 10, cy + 10, 5
@@ -1862,6 +2185,8 @@ DoBuffInner(bf) {
     }
     handled := kind != 0
     tDetect := A_TickCount - t0
+    if !kind && DebugOn
+        DLog("BUFF " StrUpper(bf["key"]) ": không thấy bảng - " BuffSampleDump())
     DLog("BUFF " StrUpper(bf["key"]) ": dò xong sau " tDetect "ms, loại bảng " kind)
     if kind {
         r := HandleBuffDialog(bf, kind)
@@ -1914,8 +2239,14 @@ LastLoopTick := 0
 Loop1() {
     global
     LoopTicks += 1
-    if LastLoopTick && A_TickCount - LastLoopTick > 1500 && !Paused()
-        DLog("VÒNG CHÍNH TRỄ: " (A_TickCount - LastLoopTick) "ms kể từ vòng trước (có thứ gì đó chặn)")
+    if LastLoopTick && A_TickCount - LastLoopTick > PerfMaxGap && !Paused()
+        PerfMaxGap := A_TickCount - LastLoopTick
+    if LastLoopTick && A_TickCount - LastLoopTick > 1500 && !Paused() {
+        rc := ""
+        for it in PerfRecent
+            rc .= it "; "
+        DLog("VÒNG CHÍNH TRỄ: " (A_TickCount - LastLoopTick) "ms kể từ vòng trước (có thứ gì đó chặn). Việc chậm gần đây: " (rc = "" ? "(không ghi nhận)" : rc))
+    }
     LastLoopTick := A_TickCount
     if !Enabled
         return
@@ -2139,7 +2470,7 @@ ZoneMatch(id, hwnd) {
     for i, p in ZonePoints(x1, y1, x2, y2, z["C"], z["R"]) {
         if i > z["pts"].Length
             break
-        c := Integer(PixelGetColor(p[1], p[2]))
+        c := Integer(PxGet(p[1], p[2]))
         r := z["pts"][i]
         n += 1
         if Abs(((c >> 16) & 255) - ((r >> 16) & 255)) <= ZoneTol && Abs(((c >> 8) & 255) - ((r >> 8) & 255)) <= ZoneTol && Abs((c & 255) - (r & 255)) <= ZoneTol
@@ -2160,7 +2491,7 @@ ZoneDistance(rectId, ptsId, hwnd) {
     for i, p in ZonePoints(x1, y1, x2, y2, z["C"], z["R"]) {
         if i > ref.Length
             break
-        c := Integer(PixelGetColor(p[1], p[2]))
+        c := Integer(PxGet(p[1], p[2]))
         r := ref[i]
         sum += (Abs(((c >> 16) & 255) - ((r >> 16) & 255)) + Abs(((c >> 8) & 255) - ((r >> 8) & 255)) + Abs((c & 255) - (r & 255))) / 3
         n += 1
@@ -2246,11 +2577,7 @@ ZoneNeedWindow(id) {
         MsgBox "Không thấy cửa sổ " (SubStr(id, 1, 1) = "L" ? "launcher" : "game") ".`nHãy mở nó và để đúng màn hình cần học rồi bấm lại.", "Maple Auto v1", "Icon!"
         return 0
     }
-    try {
-        if WinGetMinMax(hwnd) = -1
-            WinRestore hwnd
-        WinActivate hwnd
-    }
+    SoftActivate(hwnd)
     Sleep 500
     return hwnd
 }
@@ -2305,7 +2632,7 @@ ZoneLearnInner(id) {
     pts := []
     desc := ""
     for p in ZonePoints(x1, y1, x2, y2, gc, gr) {
-        pc := Integer(PixelGetColor(p[1], p[2]))
+        pc := Integer(PxGet(p[1], p[2]))
         pts.Push(pc)
         if A_Index <= 6
             desc .= ColStr(pc) " "
@@ -2313,7 +2640,7 @@ ZoneLearnInner(id) {
     Sleep 700           ; đọc lần 2 để đo độ ổn định (vùng có hiệu ứng động sẽ đổi màu)
     stab := 0
     for i, p in ZonePoints(x1, y1, x2, y2, gc, gr) {
-        pc2 := Integer(PixelGetColor(p[1], p[2]))
+        pc2 := Integer(PxGet(p[1], p[2]))
         if ColNear(pc2, (pts[i] >> 16) & 255, (pts[i] >> 8) & 255, pts[i] & 255, ZoneTol)
             stab += 1
     }
@@ -2380,11 +2707,7 @@ ZoneCheckInner() {
     lh := LauncherHwnd()
     gh := GameHwnd()
     if lh {
-        try {
-            if WinGetMinMax(lh) = -1
-                WinRestore lh
-            WinActivate lh
-        }
+        SoftActivate(lh)
         Sleep 400
     }
     out .= "LAUNCHER: " (lh ? "có cửa sổ" : "không thấy cửa sổ") "`n"
@@ -2393,7 +2716,7 @@ ZoneCheckInner() {
             out .= "  " ZoneStatusText(id, lh) "`n"
     }
     if gh {
-        try WinActivate gh
+        SoftActivate(gh)
         Sleep 400
     }
     out .= "GAME: " (gh ? "có cửa sổ" : "không thấy cửa sổ") "`n"
@@ -2478,7 +2801,7 @@ GamePt(hwnd, rx, ry, &x, &y) {
 
 GameCol(hwnd, rx, ry) {
     GamePt(hwnd, rx, ry, &x, &y)
-    return PixelGetColor(x, y)
+    return PxGet(x, y)
 }
 
 ; Nhận biết màn hình hiện tại của game: "channel" (chọn kênh + nhân vật), "loading" (NOW LOADING) hoặc ""
@@ -2571,7 +2894,7 @@ LauncherDot(lh) {
     WinGetClientPos &cx, &cy, &cw, &ch, lh
     x := Round(cx + (PlayRX + DotDX) * cw)
     y := Round(cy + PlayRY * ch + DotDY * cw)
-    c := Integer(PixelGetColor(x, y))
+    c := Integer(PxGet(x, y))
     r := (c >> 16) & 255, g := (c >> 8) & 255, b := c & 255
     st := "?"
     if g > r + 40 && g > b + 20
@@ -2596,11 +2919,11 @@ ClickPlay(lh, n) {
         x := Round(cx + PlayRX * cw)
         y := Round(cy + PlayRY * ch)
         ; Chữ "PLAY RANMELLE" màu nâu nằm ngay giữa nút nên KHÔNG đọc màu ở tâm; đọc 4 điểm cách tâm 2 bên (vẫn nằm trong nút cam)
-        cc := PixelGetColor(x, y)
+        cc := PxGet(x, y)
         n1 := 0
         desc := ""
         for off in [-0.16, -0.10, 0.10, 0.16] {
-            c := PixelGetColor(Round(x + off * cw), y)
+            c := PxGet(Round(x + off * cw), y)
             desc .= ColStr(c) " "
             if ColNear(c, 247, 190, 93, 40)
                 n1 += 1
@@ -2623,7 +2946,7 @@ ClickPlay(lh, n) {
 ChannelSelected(x, y, cellW, cellH) {
     n := 0
     for p in [[0.30, -0.22], [0.36, 0.0], [-0.05, 0.28]] {      ; 3 điểm trong ô, né chữ "CH.n" ở bên trái
-        c := PixelGetColor(Round(x + p[1] * cellW), Round(y + p[2] * cellH))
+        c := PxGet(Round(x + p[1] * cellW), Round(y + p[2] * cellH))
         r := (c >> 16) & 255, g := (c >> 8) & 255, b := c & 255
         if b > r + 60 && g > r + 40 && r < 150
             n += 1
@@ -2672,7 +2995,7 @@ ChooseChannelAndLogin(gh, n) {
         MouseMove x + Round(cellW * 0.6), y + Round(cellH * 0.9), 0     ; bỏ hover để đọc màu đúng
         Sleep 150
         sel := ChannelSelected(x, y, cellW, cellH)
-        RLog("KÊNH: bấm CH." ReChannel " tại (" x "," y ") cách " mode " -> " (sel ? "ĐÃ CHỌN (ô xanh)" : "CHƯA thấy ô xanh") "; màu mẫu " ColStr(PixelGetColor(Round(x + 0.3 * cellW), Round(y - 0.22 * cellH))))
+        RLog("KÊNH: bấm CH." ReChannel " tại (" x "," y ") cách " mode " -> " (sel ? "ĐÃ CHỌN (ô xanh)" : "CHƯA thấy ô xanh") "; màu mẫu " ColStr(PxGet(Round(x + 0.3 * cellW), Round(y - 0.22 * cellH))))
         if sel
             break
     }
@@ -2788,7 +3111,7 @@ DoRelogin(test := false, startLevel := 0) {
     }
 }
 
-; Đưa cửa sổ game lên trên cùng (khôi phục nếu đang thu nhỏ), chờ tới khi thực sự ở trên cùng
+; Đặt vị trí game (chỉ di chuyển cửa sổ, không đưa lên trên cùng)
 FocusGameWin(gh) {
     return FocusWin(gh, "game")
 }
@@ -3098,10 +3421,19 @@ ReloginAttempt(num, test, startLevel := 0) {
     return false
 }
 
-SetTimer ReloginWatch, 1000
-SetTimer Loop1, TickMs
-SetTimer ScanSlots, CheckEveryMs
-SetTimer ScanFlash, FlashEveryMs
-SetTimer UpdateHud, 500
+TmrRelog := TimedFn("canh_đăng_nhập", ReloginWatch)
+TmrLoop1 := TimedFn("loop", Loop1)
+TmrScan := TimedFn("timer_quét_ô", ScanSlots)
+TmrFlash := TimedFn("timer_nháy", ScanFlash)
+TmrHud := TimedFn("bảng_trạng_thái", UpdateHud)
+SetTimer TmrRelog, 1000
+SetTimer TmrLoop1, TickMs
+SetTimer TmrScan, CheckEveryMs
+SetTimer TmrFlash, FlashEveryMs
+SetTimer TmrHud, 500
+if DebugOn {
+    SetTimer PerfReport, 30000
+    SetTimer PerfFirstEnv, -4000
+}
 
 OnExit (*) => Send("{" MainKey " up}")
