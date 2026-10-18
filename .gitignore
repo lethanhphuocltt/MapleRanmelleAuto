@@ -1,0 +1,10 @@
+# Log sinh ra khi chay
+debug*.log
+error*.log
+*.bak
+*.bak*.ahk
+# File cua game - KHONG dua len GitHub
+*.dll
+Ranmelle.exe
+MapleStory.exe
+Data/

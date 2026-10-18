@@ -1,0 +1,49 @@
+MAPLE AUTO v1 (AutoHotkey v2, 64-bit) - HƯỚNG DẪN CÀI ĐẶT
+===========================================================
+
+NỘI DUNG GÓI
+  Game.wsb                 Cấu hình Windows Sandbox (mở game trong sandbox).
+  install_vc.ps1           Script tự chạy khi sandbox khởi động: cài Visual C++ (x86 + x64) và AutoHotkey v2. Cần mạng.
+  AHK\maple_auto_v1.ahk    Script auto (ấn skill/buff, tự đăng nhập lại khi văng game, xử lý kẹt).
+  AHK\AutoHotkey64.exe     AutoHotkey v2.0.19 bản 64-bit (không cần cài AutoHotkey để chạy script).
+  AHK\settings_v1.ini      Cài đặt hiện tại (skill, buff, kênh, vùng nhận diện đăng nhập lại).
+  AHK\slot_base_v1.ini     Màu chuẩn ô quickslot.
+  AHK\start_v1.cmd         Chạy auto rồi mở launcher.
+  AHK\AutoHotkey-LICENSE.txt   Giấy phép AutoHotkey (GPLv2).
+  Gói này KHÔNG chứa file game (DLL, Ranmelle.exe, MapleStory.exe, Data...). Phải có sẵn thư mục game đầy đủ.
+
+CÁCH CÀI
+1) Lấy gói về: git clone https://github.com/lethanhphuocltt/MapleRanmelleAuto.git  (hoặc tải ZIP trên GitHub rồi giải nén).
+2) Chép TOÀN BỘ nội dung gói (Game.wsb, install_vc.ps1, thư mục AHK) vào THƯ MỤC GAME,
+   là thư mục chứa Ranmelle.exe. Ví dụ: E:\CleanSetupv412\
+   Kết quả: E:\CleanSetupv412\Game.wsb, E:\CleanSetupv412\install_vc.ps1, E:\CleanSetupv412\AHK\maple_auto_v1.ahk ...
+3) Mở Game.wsb bằng Notepad, sửa dòng:
+      <HostFolder>E:\CleanSetupv412</HostFolder>
+   thành đường dẫn thư mục game thật trên máy bạn. GIỮ NGUYÊN dòng <SandboxFolder>
+   (C:\Users\WDAGUtilityAccount\Desktop\CleanSetupv412) vì cài đặt đang dùng đường dẫn này.
+4) Bật Windows Sandbox (làm một lần): Windows Features > tick "Windows Sandbox" > khởi động lại máy.
+   Yêu cầu Windows 10/11 Pro hoặc Enterprise, bật ảo hóa (Virtualization) trong BIOS.
+5) Nhấp đôi Game.wsb. Sandbox mở và tự chạy install_vc.ps1 (vài phút lần đầu, cần mạng).
+6) Trong sandbox: mở Desktop\CleanSetupv412\AHK và chạy start_v1.cmd.
+   Script tự xin quyền Admin (bấm Yes). Launcher Ranmelle mở ra; đăng nhập/lưu tài khoản trong launcher như bình thường.
+
+SỬ DỤNG
+  F1 = bắt đầu / tạm dừng / tiếp tục (đổi phím trong F5).   F5 = bảng cài đặt.   F9 = chạy thử quy trình đăng nhập lại.
+  Bản 64-bit: dùng AutoHotkey64.exe. Mặc định Windows Sandbox là 64-bit nên không cần bản 32-bit.
+  Cột "Không dừng V" trong bảng skill (F5): skill được tick sẽ ấn mà không nhả phím chính.
+
+LẦN ĐẦU TRÊN MÁY MỚI
+  - Vào F5 > lấy lại "Màu chuẩn ô quickslot" và khoanh lại các vùng nhận diện đăng nhập lại nếu độ phân giải/giao diện khác
+    (vùng "Lưới kênh" khoanh từ góc trên-trái ô CH.1 tới góc dưới-phải ô CH.30, không lấy tiêu đề "Special").
+  - Kênh cần chọn đặt trong F5 (mặc định đang là CH.3).
+  - Log debug: AHK\debug_v1.log (dòng [ĐN] là quy trình đăng nhập lại).
+
+ĐẨY LÊN / CẬP NHẬT GITHUB (từ thư mục repo)
+  git add .
+  git commit -m "Cap nhat"
+  git push origin main
+  Kiểm tra "git status" trước khi commit: không được có *.dll, Ranmelle.exe, MapleStory.exe, Data/, *.log (đã có trong .gitignore).
+
+GHI CHÚ
+  - Sandbox bị xóa khi đóng; file trong thư mục game được ánh xạ (ReadOnly=false) nên cài đặt, màu chuẩn, log vẫn còn trên máy thật.
+  - Nếu hiện bảng "We can't open this 'ms-gamingoverlay' link": là Xbox Game Bar không có trong sandbox; bấm OK / ESC để tắt.

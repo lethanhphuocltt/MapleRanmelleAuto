@@ -1,0 +1,15 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Enable</Networking>
+  <MemoryInMB>8192</MemoryInMB>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>E:\CleanSetupv412</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\CleanSetupv412</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -ExecutionPolicy Bypass -File C:\Users\WDAGUtilityAccount\Desktop\CleanSetupv412\install_vc.ps1</Command>
+  </LogonCommand>
+</Configuration>
