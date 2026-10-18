@@ -493,7 +493,8 @@ ShowSettings(*) {
     g := Gui("+AlwaysOnTop", "Maple Auto v1 - Cài đặt")
     g.SetFont("s9", "Segoe UI")
     g.AddText("w560", "Chỉnh xong bấm LƯU: script sẽ tự khởi động lại với thiết lập mới. Chi tiết xem HUONG_DAN.txt.")
-    g.AddGroupBox("w560 h584 Section", "Chung")
+    gb1 := g.AddGroupBox("w560 h584 Section", "Chung")
+    gb1.GetPos(&gx, &gy)            ; bố cục 2 cột (vừa màn hình 24 inch): cột trái = Chung, cột phải = Skill + Đăng nhập lại
     rows := [
         ["General", "ToggleKey", "Phím bắt đầu / tạm dừng / tiếp tục:"],
         ["General", "MainKey", "Phím skill chính:"],
@@ -550,7 +551,7 @@ ShowSettings(*) {
     GuiCtl["UseSlotCheck"] := g.AddCheckbox("xs+12 ys+" y " w540", "Đọc ô quickslot để biết hồi chiêu xong (bỏ chọn = chỉ dùng bộ đếm thời gian)")
     GuiCtl["UseSlotCheck"].Value := UseSlotCheck ? 1 : 0
 
-    g.AddGroupBox("xs w560 h" (MaxSkillRows * 24 + 78) " Section", "Danh sách skill (theo thứ tự ưu tiên)")
+    g.AddGroupBox("x" (gx + 576) " y" gy " w560 h" (MaxSkillRows * 24 + 78) " Section", "Danh sách skill (theo thứ tự ưu tiên)")
     g.AddText("xs+12 ys+20 w60", "Phím")
     g.AddText("x+4 yp w80", "Cooldown (s)")
     g.AddText("x+4 yp w100", "Hàng ô (0/1/2)")
@@ -575,7 +576,7 @@ ShowSettings(*) {
         GuiCtl["rows"].Push([e1, e2, e3, e4, c5, c6])
     }
     g.AddText("xs+12 ys+" (MaxSkillRows * 24 + 46) " w540", "Hàng ô: 0 = không đọc ô (dùng bộ đếm), 1 = hàng trên của quickslot, 2 = hàng dưới. Để trống phím = bỏ dòng. Không dừng V: ấn skill đó mà vẫn giữ phím chính.")
-    g.AddGroupBox("xs y+34 w560 h172 Section", "Tự đăng nhập lại khi văng game (bản v1)")
+    g.AddGroupBox("xs y+16 w560 h172 Section", "Tự đăng nhập lại khi văng game (bản v1)")
     GuiCtl["ReOn"] := g.AddCheckbox("xs+12 ys+20 w536", "Bật: game văng thì mở launcher (nếu chưa có), bấm PLAY, chọn kênh, Log In")
     GuiCtl["ReOn"].Value := ReloginOn ? 1 : 0
     g.AddText("xs+12 ys+48 w150", "Launcher (.exe):")
@@ -587,7 +588,7 @@ ShowSettings(*) {
     g.AddButton("xs+12 ys+104 w300", "Nhận diện màn hình (khoanh vùng bằng kéo thả)...").OnEvent("Click", (*) => ShowZoneGui())
     g.AddButton("x+8 yp w224", "Chạy thử quy trình đăng nhập lại").OnEvent("Click", TestRelogin)
     g.AddText("xs+12 ys+138 w536 cGray", "F9 = chạy thử quy trình (mở sẵn launcher hoặc màn hình chọn kênh). Log từng bước: debug_v1.log.")
-    g.AddButton("xs y+26 w100 Default", "LƯU").OnEvent("Click", SaveSettings)
+    g.AddButton("x" gx " y" (gy + Max(584, MaxSkillRows * 24 + 78 + 16 + 172) + 14) " w100 Default", "LƯU").OnEvent("Click", SaveSettings)
     g.AddButton("x+8 w130", "Màu chuẩn ô...").OnEvent("Click", (*) => ShowColorGui())
     g.AddButton("x+8 w130", "Mở HƯỚNG DẪN").OnEvent("Click", (*) => OpenGuide())
     g.AddButton("x+8 w100", "Đóng").OnEvent("Click", (*) => g.Hide())
