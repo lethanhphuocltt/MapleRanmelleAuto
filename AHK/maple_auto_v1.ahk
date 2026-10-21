@@ -59,6 +59,7 @@ Defaults := [
     ["Detect", "QS_DX", "35"],              ; khoảng cách giữa 2 ô
     ["Detect", "QS_Y1", "64"],              ; hàng trên cách mép dưới
     ["Detect", "QS_Y2", "29"],              ; hàng dưới cách mép dưới
+    ["Detect", "BatchCapture", "1"],        ; 1 = chụp cả dải quickslot 1 lần rồi đọc màu từ ảnh (nhanh hơn nhiều so với đọc từng điểm); 0 = đọc từng điểm
     ["Detect", "ReadyDist", "45"],
     ["Detect", "VerifyDist", "60"],
     ["Detect", "VerifyMs", "300"],
@@ -162,6 +163,7 @@ QS_X0         := Number(Cfg("Detect", "QS_X0"))
 QS_DX         := Number(Cfg("Detect", "QS_DX"))
 QS_Y1         := Number(Cfg("Detect", "QS_Y1"))
 QS_Y2         := Number(Cfg("Detect", "QS_Y2"))
+UseBatch      := Cfg("Detect", "BatchCapture") != "0"
 ReadyDist     := Number(Cfg("Detect", "ReadyDist"))
 VerifyDist    := Number(Cfg("Detect", "VerifyDist"))
 VerifyMs      := Integer(Cfg("Detect", "VerifyMs"))
@@ -396,7 +398,16 @@ PxBench(label) {
             WinActive(GameWin)
             d := PerfNow() - t, t4 += d, m4 := Max(m4, d)
         }
-        DLog("BENCH " label ": đọc 1 điểm ở góc màn hình tb=" Round(t1 / 10, 1) "ms max=" Round(m1, 1) "  | giữa game tb=" Round(t2 / 10, 1) "ms max=" Round(m2, 1) "  | WinGetClientPos tb=" Round(t3 / 10, 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / 10, 2) "ms max=" Round(m4, 1))
+        tq := 0, mq := 0, qn := 0
+        if h && UseBatch && !QsOff {
+            loop 5 {
+                t := PerfNow()
+                if QsCapture(cx, cy, cw, ch, Scale(cw), true)
+                    qn += 1
+                d := PerfNow() - t, tq += d, mq := Max(mq, d)
+            }
+        }
+        DLog("BENCH " label ": chụp gộp dải quickslot " (qn ? "tb=" Round(tq / 5, 1) "ms max=" Round(mq, 1) "ms" : "không chạy") "  | đọc 1 điểm ở góc màn hình tb=" Round(t1 / 10, 1) "ms max=" Round(m1, 1) "  | giữa game tb=" Round(t2 / 10, 1) "ms max=" Round(m2, 1) "  | WinGetClientPos tb=" Round(t3 / 10, 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / 10, 2) "ms max=" Round(m4, 1))
     }
 }
 
@@ -1179,6 +1190,112 @@ ReleaseMain() {
     Holding := false
 }
 
+; ===== Chụp gộp dải quickslot =====
+; Đọc từng điểm bằng PixelGetColor rất chậm trong sandbox (~30ms/điểm, vì mỗi lần gọi phải lấy lại ảnh màn hình qua GPU ảo),
+; mà mỗi lượt quét cần hàng chục điểm. Ở đây chụp CẢ dải quickslot một lần vào bộ nhớ rồi đọc các điểm từ ảnh đó (tức thời).
+; Ảnh chụp dùng chung cho quét ô, quét nháy trắng và kiểm tra sau khi ấn (còn mới <= 80ms thì không chụp lại).
+; Chụp lỗi 3 lần liên tiếp thì tự tắt và quay về đọc từng điểm. Tắt hẳn bằng BatchCapture=0 trong settings_v1.ini [Detect].
+QsBuf := ""
+QsX := 0, QsY := 0, QsW := 0, QsH := 0
+QsCx := 0, QsCy := 0, QsCw := 0
+QsAt := 0, QsOk := false, QsFails := 0, QsOff := false, QsLogged := 0, QsLastSlow := 0
+
+QsCapture(cx, cy, cw, ch, k, force := false) {
+    global QsBuf, QsX, QsY, QsW, QsH, QsCx, QsCy, QsCw, QsAt, QsOk, QsFails, QsOff, QsLogged, QsLastSlow
+    if !UseBatch || QsOff
+        return false
+    if !force && QsOk && A_TickCount - QsAt <= 80 && QsCx = cx && QsCy = cy && QsCw = cw
+        return true
+    maxCol := -1
+    for s in Skills {
+        if s.Has("slot")
+            maxCol := Max(maxCol, s["slot"][1])
+    }
+    if maxCol < 0
+        return false
+    minPX := 99999, maxPX := -99999, minPY := 99999, maxPY := -99999
+    for p in BandPts {
+        minPX := Min(minPX, p[1]), maxPX := Max(maxPX, p[1])
+        minPY := Min(minPY, p[2]), maxPY := Max(maxPY, p[2])
+    }
+    xl := cx + cw - QS_X0 * k
+    x := Floor(xl + minPX * k) - 3
+    xe := Ceil(xl + QS_DX * k * maxCol + maxPX * k) + 3
+    y := Floor(cy + ch - Max(QS_Y1, QS_Y2) * k + minPY * k) - 3
+    ye := Ceil(cy + ch - Min(QS_Y1, QS_Y2) * k + maxPY * k) + 3
+    w := xe - x + 1
+    h := ye - y + 1
+    if w < 1 || h < 1 || w > 4000 || h > 1000
+        return false
+    ok := false
+    t := PerfNow()
+    Critical "On"                       ; không cho timer khác chen vào giữa lúc chụp / sao chép
+    try {
+        hdc := DllCall("GetDC", "Ptr", 0, "Ptr")
+        if hdc {
+            mdc := DllCall("CreateCompatibleDC", "Ptr", hdc, "Ptr")
+            bmi := Buffer(40, 0)
+            NumPut("UInt", 40, bmi, 0)
+            NumPut("Int", w, bmi, 4)
+            NumPut("Int", -h, bmi, 8)           ; âm = ảnh xuôi (hàng trên cùng trước)
+            NumPut("UShort", 1, bmi, 12)
+            NumPut("UShort", 32, bmi, 14)
+            bits := 0
+            hbm := DllCall("CreateDIBSection", "Ptr", hdc, "Ptr", bmi, "UInt", 0, "Ptr*", &bits, "Ptr", 0, "UInt", 0, "Ptr")
+            if mdc && hbm && bits {
+                old := DllCall("SelectObject", "Ptr", mdc, "Ptr", hbm, "Ptr")
+                if DllCall("BitBlt", "Ptr", mdc, "Int", 0, "Int", 0, "Int", w, "Int", h, "Ptr", hdc, "Int", x, "Int", y, "UInt", 0x00CC0020, "Int") {
+                    if !IsObject(QsBuf) || QsBuf.Size < w * h * 4
+                        QsBuf := Buffer(w * h * 4)
+                    DllCall("RtlMoveMemory", "Ptr", QsBuf, "Ptr", bits, "UPtr", w * h * 4)
+                    ok := true
+                }
+                DllCall("SelectObject", "Ptr", mdc, "Ptr", old)
+            }
+            if hbm
+                DllCall("DeleteObject", "Ptr", hbm)
+            if mdc
+                DllCall("DeleteDC", "Ptr", mdc)
+            DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdc)
+        }
+        if ok {
+            QsX := x, QsY := y, QsW := w, QsH := h
+            QsCx := cx, QsCy := cy, QsCw := cw
+            QsAt := A_TickCount
+            QsOk := true
+            QsFails := 0
+        } else {
+            QsOk := false
+            QsFails += 1
+        }
+    } finally {
+        Critical "Off"
+    }
+    d := PerfNow() - t
+    if DebugOn {
+        PerfAdd("chụp_dải_ô", d)
+        if QsLogged < 3 {
+            QsLogged += 1
+            DLog("QS: chụp gộp dải quickslot " w "x" h " tại (" x "," y ") mất " Round(d, 1) "ms " (ok ? "OK" : "LỖI"))
+        } else if d > 300 && A_TickCount - QsLastSlow > 2000 {
+            QsLastSlow := A_TickCount
+            DLog("QS: chụp gộp chậm " Round(d) "ms")
+        }
+    }
+    if !ok && QsFails >= 3 {
+        QsOff := true
+        DLog("QS: chụp gộp lỗi 3 lần liên tiếp -> TẮT, quay về đọc từng điểm")
+    }
+    return ok
+}
+
+; Màu 1 điểm (0xRRGGBB): lấy từ ảnh chụp gộp nếu điểm nằm trong đó, không thì đọc trực tiếp
+QsPix(x, y) {
+    if QsOk && x >= QsX && x < QsX + QsW && y >= QsY && y < QsY + QsH
+        return NumGet(QsBuf, ((y - QsY) * QsW + (x - QsX)) * 4, "UInt") & 0xFFFFFF
+    return PxGet(x, y)
+}
+
 ; ===== Đọc ô quickslot =====
 ; Khi hồi chiêu, ô KHÔNG tối đi mà có một dải xám mờ ở mép dưới icon (và nháy trắng lúc hồi xong).
 ; Vì vậy script đọc màu vài điểm trên dải đó rồi so với màu lúc skill sẵn sàng (lưu bằng nút "Lấy màu chuẩn" trong F5).
@@ -1193,8 +1310,9 @@ SlotSample(s) {
     y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * k
     out := []
     try {
+        QsCapture(cx, cy, cw, ch, k)
         for p in BandPts {
-            c := PxGet(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
+            c := QsPix(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
             out.Push([(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF])
         }
     } catch {
@@ -1624,8 +1742,9 @@ SlotIsWhite(s) {
     x0 := cx + cw - QS_X0 * k + QS_DX * k * s["slot"][1]
     y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * k
     try {
+        QsCapture(cx, cy, cw, ch, k)
         for p in [[-9, 13], [4, 13]] {
-            c := PxGet(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
+            c := QsPix(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
             r := (c >> 16) & 0xFF
             g := (c >> 8) & 0xFF
             b := c & 0xFF
@@ -1766,6 +1885,98 @@ PixelRGB(x, y) {
     return [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF]
 }
 
+; ===== Chụp gộp vùng bảng buff (dò bảng 8 điểm -> 1 lần chụp) =====
+BdBuf := ""
+BdX := 0, BdY := 0, BdW := 0, BdH := 0, BdMx := 0, BdMy := 0
+BdAt := 0, BdOk := false, BdFails := 0, BdOff := false, BdLogged := 0
+
+; Chụp hình chữ nhật (toạ độ màn hình) vào buf (BGRA, ảnh xuôi). Trả về true nếu thành công.
+GrabRect(x, y, w, h, &buf) {
+    ok := false
+    Critical "On"
+    try {
+        hdc := DllCall("GetDC", "Ptr", 0, "Ptr")
+        if hdc {
+            mdc := DllCall("CreateCompatibleDC", "Ptr", hdc, "Ptr")
+            bmi := Buffer(40, 0)
+            NumPut("UInt", 40, bmi, 0)
+            NumPut("Int", w, bmi, 4)
+            NumPut("Int", -h, bmi, 8)
+            NumPut("UShort", 1, bmi, 12)
+            NumPut("UShort", 32, bmi, 14)
+            bits := 0
+            hbm := DllCall("CreateDIBSection", "Ptr", hdc, "Ptr", bmi, "UInt", 0, "Ptr*", &bits, "Ptr", 0, "UInt", 0, "Ptr")
+            if mdc && hbm && bits {
+                old := DllCall("SelectObject", "Ptr", mdc, "Ptr", hbm, "Ptr")
+                if DllCall("BitBlt", "Ptr", mdc, "Int", 0, "Int", 0, "Int", w, "Int", h, "Ptr", hdc, "Int", x, "Int", y, "UInt", 0x00CC0020, "Int") {
+                    if !IsObject(buf) || buf.Size < w * h * 4
+                        buf := Buffer(w * h * 4)
+                    DllCall("RtlMoveMemory", "Ptr", buf, "Ptr", bits, "UPtr", w * h * 4)
+                    ok := true
+                }
+                DllCall("SelectObject", "Ptr", mdc, "Ptr", old)
+            }
+            if hbm
+                DllCall("DeleteObject", "Ptr", hbm)
+            if mdc
+                DllCall("DeleteDC", "Ptr", mdc)
+            DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdc)
+        }
+    } finally {
+        Critical "Off"
+    }
+    return ok
+}
+
+; mx,my = tâm vùng client game; k = hệ số phóng. Ảnh còn mới <= 40ms thì dùng lại (sau khi ấn phím luôn phải thấy ảnh mới).
+BdCapture(mx, my, k) {
+    global BdBuf, BdX, BdY, BdW, BdH, BdMx, BdMy, BdAt, BdOk, BdFails, BdOff, BdLogged
+    if !UseBatch || BdOff
+        return false
+    if BdOk && A_TickCount - BdAt <= 40 && BdMx = mx && BdMy = my
+        return true
+    x := Floor(mx - 171 * k) - 3
+    xe := Ceil(mx + 171 * k) + 3
+    y := Floor(my - 60 * k) - 3
+    ye := Ceil(my + 25 * k) + 3
+    w := xe - x + 1
+    h := ye - y + 1
+    if w < 1 || h < 1 || w > 4000 || h > 1000
+        return false
+    t := PerfNow()
+    ok := GrabRect(x, y, w, h, &BdBuf)
+    d := PerfNow() - t
+    if ok {
+        BdX := x, BdY := y, BdW := w, BdH := h, BdMx := mx, BdMy := my
+        BdAt := A_TickCount
+        BdOk := true
+        BdFails := 0
+    } else {
+        BdOk := false
+        BdFails += 1
+    }
+    if DebugOn {
+        PerfAdd("chụp_bảng_buff", d)
+        if BdLogged < 2 {
+            BdLogged += 1
+            DLog("QS: chụp gộp vùng bảng buff " w "x" h " tại (" x "," y ") mất " Round(d, 1) "ms " (ok ? "OK" : "LỖI"))
+        }
+    }
+    if !ok && BdFails >= 3 {
+        BdOff := true
+        DLog("QS: chụp gộp bảng buff lỗi 3 lần liên tiếp -> TẮT, quay về đọc từng điểm")
+    }
+    return ok
+}
+
+BdRGB(x, y) {
+    if BdOk && x >= BdX && x < BdX + BdW && y >= BdY && y < BdY + BdH
+        c := NumGet(BdBuf, ((y - BdY) * BdW + (x - BdX)) * 4, "UInt") & 0xFFFFFF
+    else
+        c := PxGet(x, y)
+    return [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF]
+}
+
 BuffDialogKind() {
     t0 := A_TickCount
     r := BuffDialogKindRaw()
@@ -1789,10 +2000,11 @@ BuffDialogKindRaw() {
     mx := cx + cw / 2
     my := cy + ch / 2
     try {
+        BdCapture(mx, my, k)
         ; loại 1: bảng lớn, nền xanh ngọc đậm ~ (37,135,168)
         n := 0
         for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-            c := PixelRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
+            c := BdRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
             if Abs(c[1] - 40) <= 24 && Abs(c[2] - 140) <= 34 && Abs(c[3] - 170) <= 34
                 n += 1
         }
@@ -1801,14 +2013,14 @@ BuffDialogKindRaw() {
         ; loại 2: bảng nhỏ, phần trên xanh ngọc sáng ~ (44,165,186), phần dưới xám nhạt ~ (236,236,237)
         n := 0
         for p in [[-140, -45], [140, -45], [-140, -20], [140, -20]] {
-            c := PixelRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
+            c := BdRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
             if Abs(c[1] - 44) <= 20 && Abs(c[2] - 165) <= 20 && Abs(c[3] - 186) <= 20
                 n += 1
         }
         if n >= 3 {
             g := 0
             for p in [[-140, 25], [140, 25]] {
-                c := PixelRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
+                c := BdRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
                 if c[1] >= 215 && c[2] >= 215 && c[3] >= 215
                     g += 1
             }

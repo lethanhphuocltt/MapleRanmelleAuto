@@ -10,6 +10,6 @@
     </MappedFolder>
   </MappedFolders>
   <LogonCommand>
-    <Command>powershell.exe -ExecutionPolicy Bypass -File C:\Users\WDAGUtilityAccount\Desktop\CleanSetupv412\install_vc.ps1</Command>
+    <Command>powershell.exe -ExecutionPolicy Bypass -Command "$r='C:\Users\WDAGUtilityAccount\Desktop\CleanSetupv412'; $f=@(($r+'\install_vc.ps1'),($r+'\MapleAuto_GitHub\MapleRanmelleAuto\install_vc.ps1')) | Where-Object { Test-Path $_ } | Select-Object -First 1; if ($f) { powershell.exe -ExecutionPolicy Bypass -File $f }"</Command>
   </LogonCommand>
 </Configuration>
