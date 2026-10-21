@@ -32,6 +32,8 @@ try {
 ; =====================================================================
 IniFile := A_ScriptDir "\settings_" IniRead(A_ScriptDir "\settings_v1.ini", "General", "Profile", "v1") ".ini"
 SlotIni := A_ScriptDir "\slot_base_v1.ini"   ; màu "sẵn sàng" của từng ô (lưu bằng nút "Lấy màu chuẩn" trong F5)
+; Nhãn bản dựng: hiện ở tiêu đề cửa sổ F5 và dòng đầu log để biết cửa sổ đang chạy mã mới hay bản cũ còn nằm trong bộ nhớ
+ScriptBuild := "20261022-build4"
 
 ; Giá trị mặc định: [mục, tên, mặc định]
 Defaults := [
@@ -58,6 +60,7 @@ Defaults := [
     ["Buff2", "EverySec", "180"],
     ["Buff2", "WaitSec", "5"],
     ["Buff2", "Action", "esc"],
+    ["Buff", "Count", "2"],                 ; số dòng buff đang dùng ([Buff], [Buff2], [Buff3]...); thêm/bớt bằng nút + / − trong thẻ Buff
     ["Buff", "BtnDX", ""],                  ; vị trí nút Use Unapplied Buffs do người dùng chọn (px game, tính từ tâm vùng game); trống = chưa chọn
     ["Buff", "BtnDY", ""],
     ["Buff", "Action", "all"],              ; khi hiện bảng buff (mặc định all): unapplied = bấm chuột "Use Unapplied Buffs"; all = ấn Enter (chọn "Use All Buffs")
@@ -105,14 +108,31 @@ Defaults := [
     ["Detect", "FlashEveryMs", "200"],
     ["Detect", "FlashIgnoreMs", "2000"],
     ["Detect", "CheckEveryMs", "1000"],
+    ["Detect", "RelearnMin", "5"],          ; ô bị coi là "hồi chiêu" liên tục quá chừng này phút -> tạm ngừng ấn phím đó + cảnh báo (0 = tắt)
 ]
-; Skill: phím|cooldown(giây)|hàng quickslot (0=không có/không đọc, 1=hàng trên, 2=hàng dưới)|cột (từ 0)|lặp (1/0)|không dừng phím chính khi dùng (1/0)
+; Skill: phím|cooldown(giây)|hàng quickslot (0=không có/không đọc, 1=hàng trên, 2=hàng dưới)|cột (từ 0)|lặp (1/0)|không dừng phím chính khi dùng (1/0)|bật (1/0)
 ; Thứ tự = thứ tự ưu tiên.
-DefaultSkills := [
-    "e|120|1|2|1", "3|360|1|6|1", "2|300|1|5|1", "1|60|1|4|1", "a|60|2|0|0",
-    "g|60|0|0|0", "f|30|2|3|1", "d|10|0|0|0", "s|10|2|1|1",
+; 2 hàng phím mặc định: hàng trên = quickslot hàng 1, hàng dưới = quickslot hàng 2, cột đánh theo thứ tự
+KeyLayout := [
+    ["q", "w", "e", "r", "t", "1", "2", "3", "4", "5", "6", "7", "8", "9", "o", "p"],
+    ["a", "s", "d", "f", "control", "alt", "z", "x", "c", "u", "i", "j", "k", "l", "n", "m"],
 ]
-MaxSkillRows := 14
+DefaultSkills := [
+    ; hàng 1 (quickslot hàng trên)
+    "q|60|1|0|0|0|0", "w|60|1|1|0|0|0", "e|120|1|2|1|0|1", "r|60|1|3|0|0|0",
+    "t|60|1|4|0|0|0", "1|60|1|5|1|0|1", "2|300|1|6|1|0|1", "3|360|1|7|1|0|1",
+    "4|60|1|8|0|0|0", "5|60|1|9|0|0|0", "6|60|1|10|0|0|0", "7|60|1|11|0|0|0",
+    "8|60|1|12|0|0|0", "9|60|1|13|0|0|0", "o|60|1|14|0|0|0", "p|60|1|15|0|0|0",
+    ; hàng 2 (quickslot hàng dưới)
+    "a|60|2|0|0|0|1", "s|10|2|1|1|1|1", "d|10|2|2|0|0|1", "f|30|2|3|1|0|1",
+    "control|60|2|4|0|0|0", "alt|60|2|5|0|0|0", "z|60|2|6|0|0|0", "x|60|2|7|0|0|0",
+    "c|60|2|8|0|0|0", "u|60|2|9|0|0|0", "i|60|2|10|0|0|0", "j|60|2|11|0|0|0",
+    "k|60|2|12|0|0|0", "l|60|2|13|0|0|0", "n|60|2|14|0|0|0", "m|60|2|15|0|0|0",
+]
+MaxSkillRows := 34
+SkillLayoutRows := 0     ; số dòng sau khi xếp lại bảng skill theo 2 hàng phím mặc định
+; phím đang dùng của bộ skill cũ: khi phải tạo dòng mới thì bật sẵn
+DefaultOn := Map("e", 1, "3", 1, "2", 1, "1", 1, "4", 1, "5", 1, "a", 1, "s", 1, "d", 1, "f", 1)
 
 if !FileExist(IniFile)
     FirstRun := true
@@ -120,6 +140,7 @@ else
     FirstRun := false
 CreateDefaults()
 CreateDefaults() {
+    global SkillLayoutRows
     for d in Defaults {
         if IniRead(IniFile, d[1], d[2], "<none>") = "<none>"
             IniWrite d[3], IniFile, d[1], d[2]
@@ -128,7 +149,79 @@ CreateDefaults() {
         for i, v in DefaultSkills
             IniWrite v, IniFile, "Skills", "Skill" i
     }
+    SkillLayoutRows := MigrateSkillLayout()
 }
+
+; Đưa [Skills] về đúng danh sách 2 hàng phím mặc định (điền sẵn phím/hàng/cột để không phải tự nhập).
+; Giữ cooldown / lặp / không dừng V / bật của phím đã có; phím không thuộc danh sách mặc định thì để ở cuối.
+MigrateSkillLayout() {
+    global IniFile, KeyLayout, MaxSkillRows, DefaultOn
+    cur := Map()
+    loop MaxSkillRows {
+        line := IniRead(IniFile, "Skills", "Skill" A_Index, "")
+        if line = ""
+            continue
+        f := StrSplit(line, "|")
+        k := StrLower(Trim(f[1]))
+        if k = "" || cur.Has(k)
+            continue
+        while f.Length < 7
+            f.Push("")
+        if Trim(f[2]) = "" || !IsNumber(Trim(f[2]))
+            f[2] := "60"
+        if Trim(f[7]) = ""
+            f[7] := "1"
+        cur[k] := f
+    }
+    if cur.Count = 0
+        return 0
+    out := []
+    for row, keys in KeyLayout {
+        for col, k in keys {
+            if cur.Has(k) {
+                f := cur[k]
+                out.Push(k "|" f[2] "|" row "|" (col - 1) "|" f[5] "|" f[6] "|" f[7])
+                cur.Delete(k)
+            } else {
+                ; phím mới: bật sẵn nếu là phím đang dùng của bộ skill cũ
+                out.Push(k "|60|" row "|" (col - 1) "|0|0|" (DefaultOn.Has(k) ? "1" : "0"))
+            }
+        }
+    }
+    for k, f in cur
+        out.Push(k "|" f[2] "|" f[3] "|" f[4] "|" f[5] "|" f[6] "|" f[7])
+    if out.Length > MaxSkillRows
+        return 0
+    same := true
+    loop out.Length {
+        if IniRead(IniFile, "Skills", "Skill" A_Index, "") != out[A_Index] {
+            same := false
+            break
+        }
+    }
+    if !same {
+        loop MaxSkillRows
+            IniDelete IniFile, "Skills", "Skill" A_Index
+        for i, l in out
+            IniWrite l, IniFile, "Skills", "Skill" i
+    }
+    return out.Length
+}
+; Phím / hàng ô / cột ô của dòng thứ i (1..32) theo bảng 2 hàng cố định; "" nếu ngoài danh sách
+LayoutEntry(i) {
+    global KeyLayout
+    n := 0
+    for row, keys in KeyLayout {
+        for col, k in keys {
+            n += 1
+            if n = i
+                return [k, row, col - 1]
+        }
+    }
+    return ["", 0, 0]
+}
+KeyLabel(k) => k = "control" ? "Ctrl" : k = "alt" ? "Alt" : StrUpper(k)
+
 Cfg(sec, key) {
     for d in Defaults {
         if d[1] = sec && d[2] = key
@@ -149,16 +242,57 @@ RepMin        := Integer(Cfg("General", "RepMin"))
 RepMax        := Max(RepMin, Integer(Cfg("General", "RepMax")))
 FocusMs       := Max(1, Integer(Cfg("General", "FocusSec"))) * 1000
 AutoFocus     := Cfg("General", "AutoFocus") = "1"
-; Các phím buff: [Buff] = buff 1, [Buff2] = buff 2. Action: unapplied (bấm chuột Use Unapplied Buffs) / all (Enter = Use All Buffs) / esc (tắt bảng).
+; Các phím buff: dòng 1 = [Buff], dòng 2 = [Buff2], dòng 3 = [Buff3]... (số dòng ở [Buff] Count).
+; Action: unapplied (bấm chuột Use Unapplied Buffs) / all (Enter = Use All Buffs) / esc (tắt bảng).
 ; Chỉ khi bảng buff HIỆN thì mới ấn Enter/ESC/bấm chuột; không có bảng thì không ấn gì.
+BuffCountMax := 7
+BuffSec(i) => i = 1 ? "Buff" : "Buff" i
+BuffVal(i, key) {
+    global IniFile
+    d := key = "Enabled" ? (i <= 2 ? "1" : "0")
+        : key = "Key" ? (i = 1 ? "q" : i = 2 ? "6" : "")
+        : key = "EverySec" ? "180"
+        : key = "WaitSec" ? "5"
+        : key = "Action" ? (i = 2 ? "esc" : "all")
+        : ""
+    return IniRead(IniFile, BuffSec(i), key, d)
+}
+; Số dòng buff: đọc Count; file cũ chưa có Count thì đếm các section [Buff2], [Buff3]... đang có
+BuffCountInit() {
+    global IniFile, BuffCountMax
+    n := Integer(IniRead(IniFile, "Buff", "Count", "0"))
+    if n >= 1
+        return Min(n, BuffCountMax)
+    n := 1
+    loop BuffCountMax - 1 {
+        i := A_Index + 1
+        if Trim(IniRead(IniFile, BuffSec(i), "Key", "")) = "" && Trim(IniRead(IniFile, BuffSec(i), "EverySec", "")) = ""
+            break
+        n := i
+    }
+    return n
+}
+BuffCount := BuffCountInit()
+BuffEditN := 0                      ; > 0 = số dòng đang sửa trong thẻ Buff (chưa LƯU); 0 = theo BuffCount
+BuffDraft := Map()                  ; giá trị đang sửa trong thẻ Buff, giữ lại khi bấm + / − (dựng lại cửa sổ)
+; Giá trị hiển thị của dòng buff i: lấy bản nháp đang sửa, chưa có thì lấy từ ini
+BuffRowVal(i, key) {
+    global BuffDraft
+    return BuffDraft.Has(i "|" key) ? BuffDraft[i "|" key] : BuffVal(i, key)
+}
 Buffs := []
-for sec in ["Buff", "Buff2"] {
-    act := StrLower(Trim(Cfg(sec, "Action")))
+loop BuffCount {
+    i := A_Index
+    act := StrLower(Trim(BuffVal(i, "Action")))
     if act != "all" && act != "unapplied" && act != "esc"
         act := "all"
-    Buffs.Push(Map("sec", sec, "enabled", Cfg(sec, "Enabled") = "1", "key", Trim(Cfg(sec, "Key")),
-        "every", Max(10, Number(Cfg(sec, "EverySec"))), "waitMs", Max(0, Number(Cfg(sec, "WaitSec"))) * 1000,
-        "action", act, "next", 0))
+    ev := Number(BuffVal(i, "EverySec")), ws := Number(BuffVal(i, "WaitSec"))
+    if !IsNumber(ev) || ev < 10
+        ev := 180
+    if !IsNumber(ws) || ws < 0
+        ws := 5
+    Buffs.Push(Map("sec", BuffSec(i), "enabled", BuffVal(i, "Enabled") = "1", "key", Trim(BuffVal(i, "Key")),
+        "every", ev, "waitMs", ws * 1000, "action", act, "next", 0))
 }
 BtnDX         := Trim(Cfg("Buff", "BtnDX"))
 BtnDY         := Trim(Cfg("Buff", "BtnDY"))
@@ -190,6 +324,20 @@ ReadyDist     := Number(Cfg("Detect", "ReadyDist"))
 VerifyDist    := Number(Cfg("Detect", "VerifyDist"))
 VerifyMs      := Integer(Cfg("Detect", "VerifyMs"))
 MaxRetry      := Integer(Cfg("Detect", "MaxRetry"))
+RelearnMin    := Number(Cfg("Detect", "RelearnMin"))
+if !IsNumber(RelearnMin) || RelearnMin < 0
+    RelearnMin := 5
+RelearnMs     := Round(RelearnMin * 60000)
+; Theo dõi khung hình game để xoá ảnh đã chụp khi cửa sổ đổi kích thước, và cảnh báo cấu hình sai
+LastCliW      := 0
+LastCliH      := 0
+VerifyOk      := 0      ; số lần kiểm tra skill "ra ✓" (cộng dồn từ lúc chạy)
+VerifyFail    := 0      ; số lần kiểm tra skill "KHÔNG ra ✗"
+VerifyOkAt    := 0      ; mốc lần cuối có skill "ra ✓" (0 = chưa lần nào)
+CacheResets   := 0      ; số lần xoá ảnh chụp vì cửa sổ game đổi kích thước
+Relearns      := 0      ; số lần tự lấy lại màu chuẩn của ô vì "hồi chiêu" kéo dài bất thường
+CfgWarn       := ""      ; cảnh báo cấu hình cố định (kiểm tra 1 lần lúc khởi động)
+RatioWarn     := ""      ; cảnh báo tỉ lệ cửa sổ game so với khung tham chiếu (kiểm tra lại khi cửa sổ đổi)
 DebugOn       := Cfg("Debug", "Enabled") = "1"
 DebugMax      := IsInteger(Trim(Cfg("Debug", "MaxEvents"))) ? Max(50, Integer(Trim(Cfg("Debug", "MaxEvents")))) : 500
 ReloginOn     := Cfg("Relogin", "Enabled") = "1"
@@ -418,23 +566,29 @@ PxBench(label) {
             gx := cx + cw // 2, gy := cy + ch // 2
         }
         t1 := 0, m1 := 0, t2 := 0, m2 := 0, t3 := 0, m3 := 0, t4 := 0, m4 := 0
-        ; đo định kỳ thì lấy ít mẫu: mỗi mẫu PixelGetColor có thể mất 30ms, đo nhiều sẽ chặn vòng chính ~0,5-1 giây
-        nPx := label = "định kỳ" ? 3 : 10
+        ; PixelGetColor trên cửa sổ game có tăng tốc GPU có thể mất >1 giây mỗi lần (đo được 14,8 giây trong Sandbox),
+        ; nên chỉ lấy 1 mẫu ở giữa game và dừng ngay khi thấy chậm để không chặn vòng chính.
+        nPx := label = "định kỳ" ? 2 : 3
+        n1 := 0, n2 := 0
         loop nPx {
+            n1 := A_Index
             t := PerfNow()
             PixelGetColor(x, y)
             d := PerfNow() - t, t1 += d, m1 := Max(m1, d)
-            if h {
+            if h && n2 < 1 {
+                n2 += 1
                 t := PerfNow()
                 PixelGetColor(gx, gy)
                 d := PerfNow() - t, t2 += d, m2 := Max(m2, d)
-                t := PerfNow()
-                WinGetClientPos &a, &b, &c, &e, h
-                d := PerfNow() - t, t3 += d, m3 := Max(m3, d)
             }
+            t := PerfNow()
+            WinGetClientPos &a, &b, &c, &e, h
+            d := PerfNow() - t, t3 += d, m3 := Max(m3, d)
             t := PerfNow()
             WinActive(GameWin)
             d := PerfNow() - t, t4 += d, m4 := Max(m4, d)
+            if m1 > 800 || m2 > 800
+                break
         }
         tq := 0, mq := 0, qn := 0
         if h && UseBatch && !QsOff {
@@ -445,7 +599,7 @@ PxBench(label) {
                 d := PerfNow() - t, tq += d, mq := Max(mq, d)
             }
         }
-        DLog("BENCH " label ": chụp gộp dải quickslot " (qn ? "tb=" Round(tq / qn, 1) "ms max=" Round(mq, 1) "ms" : "không chạy") "  | đọc 1 điểm ở góc màn hình tb=" Round(t1 / nPx, 1) "ms max=" Round(m1, 1) "  | giữa game tb=" Round(t2 / nPx, 1) "ms max=" Round(m2, 1) "  | WinGetClientPos tb=" Round(t3 / nPx, 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / nPx, 2) "ms max=" Round(m4, 1))
+        DLog("BENCH " label ": chụp gộp dải quickslot " (qn ? "tb=" Round(tq / qn, 1) "ms max=" Round(mq, 1) "ms" : "không chạy") "  | đọc 1 điểm ở góc màn hình tb=" Round(t1 / Max(1, n1), 1) "ms max=" Round(m1, 1) "  | giữa game " (n2 ? "tb=" Round(t2 / n2, 1) "ms max=" Round(m2, 1) : "không đo") "  | WinGetClientPos tb=" Round(t3 / Max(1, n1), 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / Max(1, n1), 2) "ms max=" Round(m4, 1) (n1 < nPx ? "  (dừng sớm vì 1 lần đọc điểm ảnh quá chậm)" : ""))
     }
 }
 
@@ -463,7 +617,7 @@ PerfProcTimes(h) {
 }
 
 PerfReport() {
-    global PerfStat, PerfMaxGap, PerfReportAt, PerfSig, PerfReports, PerfPrev
+    global PerfStat, PerfMaxGap, PerfReportAt, PerfSig, PerfReports, PerfPrev, VerifyOk, VerifyFail, VerifyOkAt, CacheResets, CfgWarn, RatioWarn, Relearns
     now := A_TickCount
     wall := Max(1, now - PerfReportAt)
     PerfReportAt := now
@@ -505,6 +659,7 @@ PerfReport() {
     DllCall("GlobalMemoryStatusEx", "Ptr", mem)
     ramTxt := NumGet(mem, 4, "UInt") "% dùng, trống " (NumGet(mem, 16, "UInt64") // 1048576) "MB"
     DLog("PERF " Round(wall / 1000) "s: vòng chính trễ nhất " PerfMaxGap "ms | CPU máy " sysTxt "  script " selfTxt " (của 1 lõi)  game " gameTxt " (của 1 lõi) | RAM " ramTxt " | game " (IsGameActive() ? "đang focus" : "KHÔNG focus") " | bản script=" InstanceCount() " | pause=" (Paused() ? "có" : "không"))
+    DLog("TỔNG: kiểm tra skill ✓" VerifyOk " ✗" VerifyFail " | tự học lại màu " Relearns " lần | cửa sổ đổi " CacheResets " lần | cảnh báo cấu hình=" (CfgWarn = "" ? "không" : "CÓ") " cảnh báo tỉ lệ=" (RatioWarn = "" ? "không" : "CÓ") " | GameHwnd=" (GameHwnd() ? "có" : "KHÔNG"))
     line := ""
     for name, a in PerfStat
         line .= name ": n=" a[1] " tb=" Round(a[2] / a[1], 1) "ms max=" Round(a[3]) "ms chiếm=" Round(a[2] / wall * 100) "%  | "
@@ -516,7 +671,7 @@ PerfReport() {
         DLog("ENV đổi: [" PerfSig "] -> [" sig "]")
         PerfSig := sig
         EnvDump()
-    } else if Mod(PerfReports, 10) = 0 {
+    } else if Mod(PerfReports, 4) = 0 {
         PxBench("định kỳ")
     }
 }
@@ -620,7 +775,162 @@ loop MaxSkillRows {
         m["nostop"] := true         ; ấn skill này mà KHÔNG nhả phím chính (V) và không chờ
     if f.Length >= 7 && Trim(f[7]) = "0"
         continue                    ; cột "Bật" bỏ chọn: giữ dòng trong ini nhưng không ấn skill này
+    m["coolSince"] := 0             ; mốc bắt đầu "hồi chiêu" liên tục (0 = không theo dõi)
+    m["cdSample"] := ""             ; màu ô chụp ngay SAU lần ấn thành công = màu lúc đang hồi chiêu
+    m["cdAt"] := 0                  ; mốc lấy lại mẫu màu hồi chiêu đã ổn định (0 = không hẹn)
+    m["diffSince"] := 0             ; mốc ô bắt đầu khác màu hồi chiêu đã biết (0 = không)
+    m["blocked"] := 0               ; tạm ngừng ấn phím này đến mốc này (chống ấn quá nhiều lần)
+    m["fails"] := 0                 ; số lần ấn liên tiếp mà kiểm tra báo "không ra"
+    m["probe"] := false             ; lần ấn này là "ấn thử" để lấy màu hồi chiêu (không thử lại dồn dập)
     Skills.Push(m)
+}
+
+; Bắt các lỗi cấu hình hay gặp mà trước đây script im lặng làm sai (trùng phím, trùng ô, hằng số vô lý)
+ValidateCfg() {
+    global Skills, QS_DX, QS_X0, QS_Y1, QS_Y2, RefW, RefH, KeyLayout
+    warn := []
+    keys := Map(), slots := Map()
+    cano := Map()
+    for row, list in KeyLayout {
+        for col, k in list
+            cano[k] := [col - 1, row]       ; cột lưu trong ini tính từ 0
+    }
+    for s in Skills {
+        k := s["key"]
+        if keys.Has(k)
+            warn.Push("skill trùng phím " StrUpper(k))
+        else
+            keys[k] := true
+        if s.Has("slot") {
+            sk := s["slot"][2] "|" s["slot"][1]
+            if slots.Has(sk)
+                warn.Push("skill " StrUpper(k) " trùng ô hàng " s["slot"][2] " cột " s["slot"][1] " với " StrUpper(slots[sk]))
+            else
+                slots[sk] := k
+            ; Phím có trong 2 hàng mặc định nhưng hàng/cột khác đi -> dễ đọc sai ô
+            if cano.Has(k) && (s["slot"][1] != cano[k][1] || s["slot"][2] != cano[k][2])
+                warn.Push("phím " StrUpper(k) " đang ở hàng " s["slot"][2] " cột " (s["slot"][1] + 1) " nhưng theo 2 hàng phím mặc định là hàng " cano[k][2] " cột " (cano[k][1] + 1))
+        }
+    }
+    if QS_DX <= 0
+        warn.Push("QS_DX=" QS_DX " phải lớn hơn 0")
+    if RefW > 0 && (QS_X0 <= 0 || QS_X0 > RefW)
+        warn.Push("QS_X0=" QS_X0 " vô lý (RefW=" RefW ")")
+    if RefH > 0 && (QS_Y1 <= 0 || QS_Y1 > RefH || QS_Y2 <= 0 || QS_Y2 > RefH)
+        warn.Push("QS_Y1/QS_Y2 vô lý (RefH=" RefH ")")
+    return warn
+}
+for w in ValidateCfg() {
+    DLog("CẢNH BÁO CẤU HÌNH: " w)
+    CfgWarn .= (CfgWarn = "" ? "" : "; ") w
+}
+; Ghi lại kết quả kiểm tra để log đủ căn cứ nghiệm thu (không chỉ ghi khi có lỗi)
+CfgSummary() {
+    global Skills, QS_X0, QS_DX, QS_Y1, QS_Y2, RefW, RefH, SlotScale, CfgWarn, RelearnMin
+    nSlot := 0
+    for s in Skills {
+        if s.Has("slot")
+            nSlot += 1
+    }
+    rl := RelearnMin > 0 ? "ô bị coi là hồi chiêu > " RelearnMin " phút thì tạm ngừng ấn phím đó" : "không bảo vệ ô hồi chiêu quá lâu"
+    if CfgWarn = ""
+        DLog("KIỂM TRA CẤU HÌNH: OK - " Skills.Length " skill (trong đó " nSlot " skill đọc ô màu), không trùng phím/ô; QS_X0=" QS_X0 " QS_DX=" QS_DX " QS_Y1=" QS_Y1 " QS_Y2=" QS_Y2 " (khung " RefText() ", SlotScale=" SlotScale "); " rl)
+    else
+        DLog("KIỂM TRA CẤU HÌNH: CÓ LỖI - " CfgWarn)
+}
+CfgSummary()
+
+; Chỉ để hiển thị trong log: RefW/RefH = 0 nghĩa là tự lấy vùng game ở lần dùng đầu
+RefText() {
+    global RefW, RefH
+    return (RefW > 0 ? RefW "x" RefH : "tự động")
+}
+
+; Tóm tắt buff cho log: tổng số dòng + số dòng đang bật và phím của chúng
+BuffSummary() {
+    global Buffs
+    n := 0, txt := ""
+    for bf in Buffs {
+        if bf["enabled"] && bf["key"] != "" {
+            n += 1
+            txt .= (txt = "" ? "" : ",") StrUpper(bf["key"])
+        }
+    }
+    return Buffs.Length " dòng buff, bật " n (txt = "" ? "" : " (" txt ")")
+}
+
+; Ghi 1 khối thông tin đầu phiên để log đủ căn cứ nghiệm thu (không phải mò lại cấu hình đã dùng)
+StartupLog() {
+    global IniFile, MainKey, ToggleKey, TickMs, CheckEveryMs, FlashEveryMs, ReloginOn, DebugMax
+    global RefW, RefH, SlotScale, GameResW, UseBatch, MaxRetry, RetryGapMs, SlowRetryMs, Skills, RelearnMin
+    global SkillLayoutRows, MaxSkillRows, ScriptBuild
+    try {
+        sz := FileGetSize(A_ScriptFullPath)
+        mt := FileGetTime(A_ScriptFullPath)
+        DLog("=== PHIÊN: bản dựng " ScriptBuild " | script " A_ScriptFullPath " (" sz " byte, sửa " FormatTime(mt, "yyyy-MM-dd HH:mm:ss") ") ===")
+        DLog("PHIÊN: settings " IniFile " | khung tham chiếu " RefText() " SlotScale=" SlotScale " GameResW=" GameResW " | " Skills.Length " skill (bật) | bảng skill " SkillLayoutRows "/" MaxSkillRows " dòng theo 2 hàng phím mặc định | phím chính=" StrUpper(MainKey) " bật/tắt=" ToggleKey " | " BuffSummary() " | log tối đa " DebugMax " dòng")
+        DLog("PHIÊN: nhịp loop=" TickMs "ms quét ô=" CheckEveryMs "ms nháy=" FlashEveryMs "ms | MaxRetry=" MaxRetry " RetryGap=" RetryGapMs "ms SlowRetry=" SlowRetryMs "ms | chụp gộp=" (UseBatch ? "bật" : "tắt") " | canh đăng nhập=" (ReloginOn ? "bật" : "tắt") " | tự học lại màu ô: " (RelearnMin > 0 ? "khi ô rời màu hồi chiêu (tạm ngừng ấn nếu > " RelearnMin " phút)" : "KHÔNG (tắt)"))
+    } catch as e {
+        DLog("PHIÊN: lỗi khi ghi thông tin khởi động: " e.Message)
+    }
+}
+
+; Gọi mỗi vòng: cửa sổ game đổi kích thước thì xoá ảnh đã chụp (không dùng ảnh cũ) và kiểm tra lại tỉ lệ
+FrameCheck() {
+    global LastCliW, LastCliH, QsOk, BdOk, CacheResets
+    h := GameHwnd()
+    if !h
+        return
+    WinGetClientPos , , &cw, &ch, h
+    if cw < 10 || ch < 10
+        return
+    if cw = LastCliW && ch = LastCliH
+        return
+    first := LastCliW = 0
+    LastCliW := cw, LastCliH := ch
+    QsOk := false, BdOk := false        ; ảnh chụp theo khung cũ, phải chụp lại
+    if first {
+        FrameGeom("lúc bắt đầu", cw, ch)
+    } else {
+        CacheResets += 1
+        DLog("ENV: cửa sổ game đổi " cw "x" ch " → xoá ảnh đã chụp (lần " CacheResets "), kx=" Round(ScaleX(cw, ch), 3) " ky=" Round(ScaleY(cw, ch), 3))
+        FrameGeom("sau khi đổi", cw, ch)
+    }
+    RatioCheck(cw, ch)
+}
+
+; Toạ độ thật (tính từ góc trên-trái vùng client) của dải ô quickslot ở khung hình hiện tại
+FrameGeom(tag, cw, ch) {
+    global QS_X0, QS_DX, QS_Y1, QS_Y2, RefW, RefH, SlotScale
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
+    x0 := cw - QS_X0 * kx
+    DLog("KHUNG " tag ": client " cw "x" ch "  kx=" Round(kx, 4) " ky=" Round(ky, 4) "  ô đầu hàng trên (" Round(x0) "," Round(ch - QS_Y1 * ky) ")  hàng dưới (" Round(x0) "," Round(ch - QS_Y2 * ky) ")  bước ngang " Round(QS_DX * kx, 1) "px  cao ô " Round((QS_Y1 - QS_Y2) * ky, 1) "px  (RefW/RefH=" RefW "x" RefH ", SlotScale=" SlotScale ")")
+}
+
+; Cửa sổ lệch tỉ lệ khung tham chiếu >5% mà vẫn phóng đều 1 hệ số -> dễ đọc sai ô quickslot
+RatioCheck(cw, ch) {
+    global RefW, RefH, SlotScale, RatioWarn
+    if RefW <= 0 || RefH <= 0 {
+        RatioWarn := ""
+        return
+    }
+    ref := RefW / RefH
+    dev := Abs(cw / ch - ref) / ref
+    if SlotScale != "uniform" {
+        RatioWarn := ""
+        DLog("TỈ LỆ: cửa sổ " cw "x" ch " lệch khung " RefW "x" RefH " " Round(dev * 100, 1) "% - SlotScale=" SlotScale " nên không cảnh báo")
+        return
+    }
+    if dev <= 0.05 {
+        RatioWarn := ""
+        DLog("TỈ LỆ: cửa sổ " cw "x" ch " lệch khung " RefW "x" RefH " " Round(dev * 100, 1) "% - trong ngưỡng 5%, SlotScale=uniform dùng được")
+        return
+    }
+    msg := "cửa sổ " cw "x" ch " lệch tỉ lệ khung " RefW "x" RefH " " Round(dev * 100) "% - nếu ô quickslot đọc sai, đặt SlotScale=stretch"
+    if RatioWarn != msg {
+        RatioWarn := msg
+        DLog("CẢNH BÁO CẤU HÌNH: " msg)
+    }
 }
 
 GameWin := "ahk_exe " GameExe
@@ -728,7 +1038,7 @@ ShiftTimes(d) {
     if d <= 0
         return
     for s in Skills {
-        for k in ["next", "wait", "tmr", "press", "flash", "vat", "chk"] {
+        for k in ["next", "wait", "tmr", "press", "flash", "vat", "chk", "blocked", "diffSince", "coolSince", "cdAt"] {
             if s.Has(k) && s[k] > 0
                 s[k] += d
         }
@@ -756,6 +1066,12 @@ ResetTimers() {
         s["vat"] := 0
         s["force"] := false
         s["retries"] := 0
+        s["fails"] := 0
+        s["probe"] := false
+        s["blocked"] := 0
+        s["coolSince"] := 0
+        s["diffSince"] := 0
+        s["cdAt"] := 0
     }
     if PauseSince
         PauseSince := now       ; để khi chạy tiếp, các mốc vừa đặt không bị dời thêm cả thời gian đã tạm dừng
@@ -855,7 +1171,7 @@ OnMessage(0x115, OnVScroll)
 OnMessage(0x20A, OnWheelScroll)
 
 ShowSettings(*) {
-    global SettingsGui, GuiCtl, SettingsBusy
+    global SettingsGui, GuiCtl, SettingsBusy, BuffEditN, ScriptBuild
     SettingsBusy := true        ; tạm dừng trước, rồi mới dựng/mở bảng cài đặt
     Paused()
     if Holding
@@ -866,11 +1182,14 @@ ShowSettings(*) {
         return
     }
     GuiCtl := Map()
-    g := Gui("+AlwaysOnTop", "Maple Auto v1 - Cài đặt")
+    g := Gui("+AlwaysOnTop", "Maple Auto v1 - Cài đặt [" ScriptBuild "]")
     g.SetFont("s9", "Segoe UI")
-    g.AddText("w560", "Chỉnh xong bấm LƯU: script sẽ tự khởi động lại với thiết lập mới. Chi tiết xem HUONG_DAN.txt.")
-    gb1 := g.AddGroupBox("w560 h656 Section", "Chung")
-    gb1.GetPos(&gx, &gy)            ; bố cục 2 cột (vừa màn hình 24 inch): cột trái = Chung, cột phải = Skill + Đăng nhập lại
+    g.AddText("x16 y10 w688", "Chỉnh xong bấm LƯU (nút dưới cùng): script sẽ tự khởi động lại với thiết lập mới. Chi tiết xem HUONG_DAN.txt.")
+    tab := g.AddTab3("x16 y34 w688 h600", ["Chung", "Skill", "Buff", "Đăng nhập lại"])
+    tab.UseTab(1)
+    ; Bảng cài đặt chia 4 thẻ cho gọn. tab.UseTab(n) khiến các control thêm sau đó thuộc thẻ n
+    ; (tự ẩn/hiện theo thẻ) và toạ độ tính từ góc trên-trái vùng hiển thị của thẻ (0,0 .. 676,534).
+    ; Quên UseTab thì mọi thẻ bị vẽ đè lên nhau.
     rows := [
         ["General", "ToggleKey", "Phím bắt đầu / tạm dừng / tiếp tục:"],
         ["General", "MainKey", "Phím skill chính:"],
@@ -884,104 +1203,234 @@ ShowSettings(*) {
         ["Detect", "RefW", "Độ rộng vùng game lúc đo px tham chiếu (0 = tự):"],
         ["Detect", "RefH", "Chiều cao vùng game lúc đo px tham chiếu (0 = tự):"],
     ]
-    y := 20
+    y := 8
     for r in rows {
-        g.AddText("xs+12 ys+" y " w300", r[3])
-        GuiCtl[r[2]] := g.AddEdit("x+4 yp-3 w200", Cfg(r[1], r[2]))
+        g.AddText("x24 y" y " w320", r[3])
+        GuiCtl[r[2]] := g.AddEdit("x352 y" (y - 3) " w220", Cfg(r[1], r[2]))
         y += 24
     }
-    g.AddText("xs+12 ys+" y " w300", "Cách phóng toạ độ theo cửa sổ game:")
-    GuiCtl["SlotScale"] := g.AddDropDownList("x+4 yp-3 w200 Choose" (SlotScale = "stretch" ? 2 : SlotScale = "native" ? 3 : 1), ["uniform (đều theo chiều rộng - cũ)", "stretch (X theo rộng, Y theo cao)", "native (giữ nguyên px, UI không phóng)"])
-    y += 24
-    g.AddText("xs+12 ys+" y " w300", "Cách dùng skill chính:")
-    GuiCtl["MainMode"] := g.AddDropDownList("x+4 yp-3 w200 Choose" (MainMode = "tap" ? 2 : 1), ["Ấn giữ", "Ấn nhả (ấn rồi nhả liên tục)"])
-    y += 24
-    GuiCtl["AutoFocus"] := g.AddCheckbox("xs+12 ys+" y " w300", "Tự đưa game lên trước (chống mất focus), mỗi (giây):")
+    g.AddText("x24 y" y " w320", "Cách phóng toạ độ theo cửa sổ game:")
+    GuiCtl["SlotScale"] := g.AddDropDownList("x352 y" (y - 3) " w220 Choose" (SlotScale = "stretch" ? 2 : SlotScale = "native" ? 3 : 1), ["uniform (đều theo chiều rộng - cũ)", "stretch (X theo rộng, Y theo cao)", "native (giữ nguyên px, UI không phóng)"])
+    y += 28
+    g.AddText("x24 y" y " w320", "Cách dùng skill chính:")
+    GuiCtl["MainMode"] := g.AddDropDownList("x352 y" (y - 3) " w220 Choose" (MainMode = "tap" ? 2 : 1), ["Ấn giữ", "Ấn nhả (ấn rồi nhả liên tục)"])
+    y += 30
+    GuiCtl["AutoFocus"] := g.AddCheckbox("x24 y" y " w320", "Tự đưa game lên trước (chống mất focus), mỗi (giây):")
     GuiCtl["AutoFocus"].Value := AutoFocus ? 1 : 0
-    GuiCtl["FocusSec"] := g.AddEdit("x+4 yp-3 w60", Cfg("General", "FocusSec"))
-    y += 28
-    GuiCtl["ShowHud"] := g.AddCheckbox("xs+12 ys+" y " w300", "Hiện bảng thông tin (tooltip) giữa màn hình")
+    GuiCtl["FocusSec"] := g.AddEdit("x352 y" (y - 3) " w60", Cfg("General", "FocusSec"))
+    y += 30
+    GuiCtl["ShowHud"] := g.AddCheckbox("x24 y" y " w320", "Hiện bảng thông tin (tooltip) giữa màn hình")
     GuiCtl["ShowHud"].Value := ShowHud ? 1 : 0
-    g.AddButton("x+4 yp-4 w230", "Đặt lại thời gian (buff + hồi chiêu)").OnEvent("Click", ResetTimersBtn)
-    y += 28
-    GuiCtl["DebugOn"] := g.AddCheckbox("xs+12 ys+" y " w300", "Ghi log debug vào debug.log - số dòng tối đa:")
+    g.AddButton("x352 y" (y - 4) " w220", "Đặt lại thời gian (buff + hồi chiêu)").OnEvent("Click", ResetTimersBtn)
+    y += 30
+    GuiCtl["DebugOn"] := g.AddCheckbox("x24 y" y " w320", "Ghi log debug vào debug.log - số dòng tối đa:")
     GuiCtl["DebugOn"].Value := DebugOn ? 1 : 0
-    GuiCtl["DebugMax"] := g.AddEdit("x+4 yp-3 w60", Cfg("Debug", "MaxEvents"))
-    y += 28
-    for i, bf in Buffs {
-        pre := "B" i "_"
-        GuiCtl[pre "Enabled"] := g.AddCheckbox("xs+12 ys+" y " w110", "Tự buff " i ": phím")
-        GuiCtl[pre "Enabled"].Value := bf["enabled"] ? 1 : 0
-        GuiCtl[pre "Key"] := g.AddEdit("x+4 yp-3 w40", Cfg(bf["sec"], "Key"))
-        g.AddText("x+8 yp+3", "mỗi (giây):")
-        GuiCtl[pre "EverySec"] := g.AddEdit("x+4 yp-3 w50", Cfg(bf["sec"], "EverySec"))
-        g.AddText("x+8 yp+3", "chờ cast (giây):")
-        GuiCtl[pre "WaitSec"] := g.AddEdit("x+4 yp-3 w50", Cfg(bf["sec"], "WaitSec"))
-        y += 28
-        g.AddText("xs+30 ys+" y " w190", "Khi hiện bảng buff thì:")
-        GuiCtl[pre "Action"] := g.AddDropDownList("x+4 yp-3 w300 Choose" (bf["action"] = "esc" ? 3 : bf["action"] = "all" ? 2 : 1), ["Bấm nút Use Unapplied Buffs (chuột)", "Ấn Enter = Use All Buffs", "Tắt bảng (ESC)"])
-        y += 28
-    }
-    g.AddText("xs+30 ys+" y " w520 cGray", "Chỉ khi bảng buff hiện mới ấn Enter/ESC/bấm chuột; không có bảng thì không ấn gì.")
-    y += 24
-    GuiCtl["BtnInfo"] := g.AddText("xs+30 ys+" y " w250", IsNumber(BtnDX) && IsNumber(BtnDY) ? "Vị trí nút đã chọn: " BtnDX ", " BtnDY : "Vị trí nút: chưa chọn (tự tìm bằng màu)")
-    g.AddButton("x+4 yp-4 w120", "Chọn vị trí nút...").OnEvent("Click", CaptureBtnPos)
-    GuiCtl["AlwaysManual"] := g.AddCheckbox("x+8 yp+4 w170", "Luôn dùng vị trí đã chọn")
-    GuiCtl["AlwaysManual"].Value := BuffAlwaysManual ? 1 : 0
-    y += 28
-    GuiCtl["UseSlotCheck"] := g.AddCheckbox("xs+12 ys+" y " w540", "Đọc ô quickslot để biết hồi chiêu xong (bỏ chọn = chỉ dùng bộ đếm thời gian)")
-    GuiCtl["UseSlotCheck"].Value := UseSlotCheck ? 1 : 0
+    GuiCtl["DebugMax"] := g.AddEdit("x352 y" (y - 3) " w60", Cfg("Debug", "MaxEvents"))
+    y += 34
+    g.AddText("x24 y" y " w640 cGray", "Cài đặt chia 4 thẻ: Chung / Skill / Buff / Đăng nhập lại. Bấm LƯU ở đáy cửa sổ để ghi và khởi động lại script.")
 
-    g.AddGroupBox("x" (gx + 576) " y" gy " w560 h" (MaxSkillRows * 24 + 78) " Section", "Danh sách skill (theo thứ tự ưu tiên)")
-    g.AddText("xs+12 ys+20 w28", "Bật")
-    g.AddText("x+4 yp w60", "Phím")
-    g.AddText("x+4 yp w80", "Cooldown (s)")
-    g.AddText("x+4 yp w100", "Hàng ô (0/1/2)")
-    g.AddText("x+4 yp w70", "Cột ô (từ 0)")
-    g.AddText("x+4 yp w44", "Lặp")
-    g.AddText("x+4 yp w100", "Không dừng V")
+    ; --- Tab 3: Buff (số dòng thêm/bớt bằng nút + / − ở đáy thẻ; bấm LƯU để ghi [Buff] Count) ---
+    tab.UseTab(3)
+    nB := BuffEditN >= 1 ? BuffEditN : BuffCount
+    BuffEditN := nB
+    GuiCtl["bufN"] := nB
+    y := 16
+    loop nB {
+        i := A_Index
+        pre := "B" i "_"
+        GuiCtl[pre "Enabled"] := g.AddCheckbox("x24 y" y " w150", "Tự buff " i ": phím")
+        GuiCtl[pre "Enabled"].Value := BuffRowVal(i, "Enabled") = "1" ? 1 : 0
+        GuiCtl[pre "Key"] := g.AddEdit("x178 y" (y - 3) " w40", BuffRowVal(i, "Key"))
+        g.AddText("x226 y" y " w74", "mỗi (giây):")
+        GuiCtl[pre "EverySec"] := g.AddEdit("x302 y" (y - 3) " w52", BuffRowVal(i, "EverySec"))
+        g.AddText("x362 y" y " w86", "chờ cast (s):")
+        GuiCtl[pre "WaitSec"] := g.AddEdit("x450 y" (y - 3) " w52", BuffRowVal(i, "WaitSec"))
+        y += 26
+        g.AddText("x24 y" y " w120", "Khi hiện bảng:")
+        bAct := StrLower(Trim(BuffRowVal(i, "Action")))
+        GuiCtl[pre "Action"] := g.AddDropDownList("x150 y" (y - 3) " w400 Choose" (bAct = "esc" ? 3 : bAct = "all" ? 2 : 1), ["Bấm nút Use Unapplied Buffs (chuột)", "Ấn Enter = Use All Buffs", "Tắt bảng (ESC)"])
+        y += 26
+    }
+    g.AddText("x24 y" y " w650 cGray", "Chỉ khi bảng buff hiện mới ấn Enter/ESC/bấm chuột; không có bảng thì không ấn gì.")
+    y += 24
+    GuiCtl["BtnInfo"] := g.AddText("x24 y" y " w280", IsNumber(BtnDX) && IsNumber(BtnDY) ? "Vị trí nút đã chọn: " BtnDX ", " BtnDY : "Vị trí nút: chưa chọn (tự tìm bằng màu)")
+    g.AddButton("x312 y" (y - 4) " w160", "Chọn vị trí nút...").OnEvent("Click", CaptureBtnPos)
+    GuiCtl["AlwaysManual"] := g.AddCheckbox("x480 y" (y + 2) " w190", "Luôn dùng vị trí đã chọn")
+    GuiCtl["AlwaysManual"].Value := BuffAlwaysManual ? 1 : 0
+    y += 26
+    g.AddText("x24 y" y " w650 cGray", "Đặt lại thời gian = buff ấn ngay ở lần chạy tới và mọi skill tính lại hồi chiêu từ đầu.")
+    g.AddButton("x24 y478 w150", "Thêm buff (+)").OnEvent("Click", (*) => BuffRowDelta(1))
+    g.AddButton("x182 y478 w150", "Bớt buff (−)").OnEvent("Click", (*) => BuffRowDelta(-1))
+    g.AddText("x348 y482 w330 cGray", "Tối đa " BuffCountMax " dòng. Thêm/bớt rồi bấm LƯU để ghi.")
+
+    ; --- Tab 4: Đăng nhập lại ---
+    tab.UseTab(4)
+    GuiCtl["ReOn"] := g.AddCheckbox("x24 y8 w640", "Bật: game văng thì mở launcher (nếu chưa có), bấm PLAY, chọn kênh, Log In")
+    GuiCtl["ReOn"].Value := ReloginOn ? 1 : 0
+    g.AddText("x24 y40 w150", "Launcher (.exe):")
+    GuiCtl["ReLauncher"] := g.AddEdit("x180 y37 w480", ReLauncher)
+    g.AddText("x24 y72 w150", "Kênh cần chọn (1-30):")
+    GuiCtl["ReChannel"] := g.AddEdit("x180 y69 w80", ReChannel)
+    g.AddText("x290 y72 w200", "Coi là văng sau (giây):")
+    GuiCtl["ReLost"] := g.AddEdit("x496 y69 w80", ReLostSec)
+    g.AddButton("x24 y104 w320", "Nhận diện màn hình (khoanh vùng bằng kéo thả)...").OnEvent("Click", (*) => ShowZoneGui())
+    g.AddButton("x352 y104 w300", "Chạy thử quy trình đăng nhập lại").OnEvent("Click", TestRelogin)
+    g.AddText("x24 y140 w640 cGray", "F9 = chạy thử quy trình (mở sẵn launcher hoặc màn hình chọn kênh). Log từng bước: debug_v1.log.")
+
+    ; --- Tab 2: Skill ---
+    tab.UseTab(2)
+    GuiCtl["UseSlotCheck"] := g.AddCheckbox("x20 y8 w640", "Đọc ô quickslot để biết hồi chiêu xong (bỏ chọn = chỉ dùng bộ đếm thời gian)")
+    GuiCtl["UseSlotCheck"].Value := UseSlotCheck ? 1 : 0
+    g.AddText("x20 y36 w440", "Ô bị coi là hồi chiêu quá lâu (phút) thì tạm ngừng ấn phím đó (0 = tắt):")
+    GuiCtl["RelearnMin"] := g.AddEdit("x476 y33 w60", Cfg("Detect", "RelearnMin"))
+    for cx in [20, 366] {
+        g.AddText("x" cx " y64 w30", "Bật")
+        g.AddText("x" (cx + 34) " y64 w50", "Phím")
+        g.AddText("x" (cx + 88) " y64 w74", "Cooldown (s)")
+        g.AddText("x" (cx + 162) " y64 w34", "Lặp")
+        g.AddText("x" (cx + 200) " y64 w110", "Không dừng V")
+    }
+
     GuiCtl["rows"] := []
+    extra := 0
     loop MaxSkillRows {
         line := IniRead(IniFile, "Skills", "Skill" A_Index, "")
         f := StrSplit(line, "|")
         while f.Length < 7
             f.Push("")
-        yy := 40 + (A_Index - 1) * 24
-        c0 := g.AddCheckbox("xs+12 ys+" (yy + 3) " w24", "")
-        c0.Value := Trim(f[7]) = "0" ? 0 : 1      ; không ghi/trống = bật
-        e1 := g.AddEdit("x+4 yp-3 w60", f[1])
-        e2 := g.AddEdit("x+4 yp w80", f[2])
-        e3 := g.AddEdit("x+4 yp w100", f[3])
-        e4 := g.AddEdit("x+4 yp w70", f[4])
-        c5 := g.AddCheckbox("x+4 yp+3 w44", "")
+        fx := LayoutEntry(A_Index)
+        fixed := fx[1] != ""
+        if fixed
+            f[1] := fx[1], f[3] := String(fx[2]), f[4] := String(fx[3])
+        if Trim(f[2]) = ""
+            f[2] := "60"
+        ; hàng 1 của bàn phím -> cột trái, hàng 2 -> cột phải, phím ngoài danh sách -> cuối cột phải
+        cx := (!fixed || fx[2] = 2) ? 366 : 20
+        cy := 88 + (fixed ? fx[3] : 16 + extra) * 22
+        if !fixed
+            extra += 1
+        c0 := g.AddCheckbox("x" cx " y" (cy + 3) " w30", "")
+        c0.Value := (Trim(f[7]) = "0" || Trim(f[1]) = "") ? 0 : 1      ; không ghi/trống = bật; dòng trống = tắt
+        e1 := fixed ? g.AddEdit("x" (cx + 34) " y" cy " w50 ReadOnly BackgroundEEEEEE", KeyLabel(f[1])) : g.AddEdit("x" (cx + 34) " y" cy " w50", f[1])
+        e2 := g.AddEdit("x" (cx + 88) " y" cy " w66", f[2])
+        c5 := g.AddCheckbox("x" (cx + 162) " y" (cy + 3) " w34", "")
         c5.Value := Trim(f[5]) = "1" ? 1 : 0
-        c6 := g.AddCheckbox("x+4 yp w100", "")
+        c6 := g.AddCheckbox("x" (cx + 200) " y" (cy + 3) " w110", "")
         c6.Value := Trim(f[6]) = "1" ? 1 : 0
-        GuiCtl["rows"].Push([e1, e2, e3, e4, c5, c6, c0])
+        ; Map (không dùng object literal) vì SaveSettings/ListSkills truy cập bằng r["..."] - object thường không hỗ trợ []
+        GuiCtl["rows"].Push(Map("e1", e1, "e2", e2, "c5", c5, "c6", c6, "c0", c0, "fixed", fx, "oldRow", f[3], "oldCol", f[4]))
     }
-    g.AddText("xs+12 ys+" (MaxSkillRows * 24 + 46) " w540", "Hàng ô: 0 = không đọc ô (dùng bộ đếm), 1 = hàng trên của quickslot, 2 = hàng dưới. Để trống phím = bỏ dòng. Không dừng V: ấn skill đó mà vẫn giữ phím chính. Bật: bỏ chọn = tạm tắt skill đó (vẫn giữ dòng cấu hình).")
-    g.AddGroupBox("xs y+16 w560 h172 Section", "Tự đăng nhập lại khi văng game (bản v1)")
-    GuiCtl["ReOn"] := g.AddCheckbox("xs+12 ys+20 w536", "Bật: game văng thì mở launcher (nếu chưa có), bấm PLAY, chọn kênh, Log In")
-    GuiCtl["ReOn"].Value := ReloginOn ? 1 : 0
-    g.AddText("xs+12 ys+48 w150", "Launcher (.exe):")
-    GuiCtl["ReLauncher"] := g.AddEdit("x+4 yp-3 w380", ReLauncher)
-    g.AddText("xs+12 ys+76 w150", "Kênh cần chọn (1-30):")
-    GuiCtl["ReChannel"] := g.AddEdit("x+4 yp-3 w60", ReChannel)
-    g.AddText("x+16 yp+3 w170", "Coi là văng sau (giây):")
-    GuiCtl["ReLost"] := g.AddEdit("x+4 yp-3 w60", ReLostSec)
-    g.AddButton("xs+12 ys+104 w300", "Nhận diện màn hình (khoanh vùng bằng kéo thả)...").OnEvent("Click", (*) => ShowZoneGui())
-    g.AddButton("x+8 yp w224", "Chạy thử quy trình đăng nhập lại").OnEvent("Click", TestRelogin)
-    g.AddText("xs+12 ys+138 w536 cGray", "F9 = chạy thử quy trình (mở sẵn launcher hoặc màn hình chọn kênh). Log từng bước: debug_v1.log.")
-    g.AddButton("x" gx " y" (gy + Max(656, MaxSkillRows * 24 + 78 + 16 + 172) + 14) " w100 Default", "LƯU").OnEvent("Click", SaveSettings)
-    g.AddButton("x+8 w130", "Màu chuẩn ô...").OnEvent("Click", (*) => ShowColorGui())
-    g.AddButton("x+8 w130", "Mở HƯỚNG DẪN").OnEvent("Click", (*) => OpenGuide())
-    g.AddButton("x+8 w100", "Đóng").OnEvent("Click", (*) => g.Hide())
+    g.AddText("x20 y466 w650 cGray", "Phím/hàng/cột đã cố định theo 2 hàng phím. Chỉ cần điền cooldown + tick Bật.`nLặp = ấn lại dù chưa hết hồi chiêu. Không dừng V = vẫn giữ phím chính.`n2 dòng cuối cột phải: phím ngoài danh sách (chỉ dùng bộ đếm).")
+    ; --- Nút điều khiển: luôn nằm ở đáy cửa sổ, ngoài các thẻ ---
+    tab.UseTab(1)          ; hiện lại thẻ đầu khi mở bảng
+    tab.UseTab()           ; không truyền số = các control sau thuộc về cửa sổ, toạ độ tuyệt đối
+    g.AddButton("x16 y650 w110 Default", "LƯU").OnEvent("Click", SaveSettings)
+    g.AddButton("x+8 w140", "Màu chuẩn ô...").OnEvent("Click", (*) => ShowColorGui())
+    g.AddButton("x+8 w140", "Mở HƯỚNG DẪN").OnEvent("Click", (*) => OpenGuide())
+    g.AddButton("x+8 w110", "Đóng").OnEvent("Click", (*) => g.Hide())
     g.OnEvent("Close", (*) => g.Hide())
     SettingsGui := g
     if Holding
         ReleaseMain()
-    MakeScrollable(g)
+    g.Show("w732 h716 Center")
+    TabPageShift(g)
+    GuiGeomLog(nB)
     SettingsBusy := false
+}
+
+; AHK v2 đặt control của trang thẻ theo gốc client của CỬA SỔ, không theo gốc trang thẻ, nên toàn bộ
+; control bị lệch lên đúng bằng khoảng cách từ đỉnh vùng thẻ tới đỉnh trang và những dòng sát trên bị cắt mất.
+; Hàm này đo độ lệch thật của từng trang rồi đẩy control xuống cho khớp (không đổi kích thước).
+TabPageShift(g) {
+    global DebugOn
+    pt := Buffer(8, 0)
+    DllCall("ClientToScreen", "Ptr", g.Hwnd, "Ptr", pt.Ptr, "Int")
+    guiTop := NumGet(pt, 4, "Int")
+    msg := ""
+    hPage := 0
+    while (hPage := DllCall("FindWindowEx", "Ptr", g.Hwnd, "Ptr", hPage, "Str", "#32770", "Ptr", 0, "Ptr")) {
+        rc := Buffer(16, 0)
+        DllCall("GetWindowRect", "Ptr", hPage, "Ptr", rc.Ptr, "Int")
+        dy := NumGet(rc, 4, "Int") - guiTop
+        if (dy <= 0)
+            continue
+        n := 0
+        hCtl := 0
+        while (hCtl := DllCall("FindWindowEx", "Ptr", hPage, "Ptr", hCtl, "Ptr", 0, "Ptr", 0, "Ptr")) {
+            cr := Buffer(16, 0)
+            DllCall("GetWindowRect", "Ptr", hCtl, "Ptr", cr.Ptr, "Int")
+            q := Buffer(8, 0)
+            NumPut("Int", NumGet(cr, 0, "Int"), q, 0)
+            NumPut("Int", NumGet(cr, 4, "Int") + dy, q, 4)
+            DllCall("ScreenToClient", "Ptr", hPage, "Ptr", q.Ptr, "Int")
+            DllCall("SetWindowPos", "Ptr", hCtl, "Ptr", 0
+                , "Int", NumGet(q, 0, "Int"), "Int", NumGet(q, 4, "Int")
+                , "Int", 0, "Int", 0, "UInt", 0x0001 | 0x0004 | 0x0010)
+            n += 1
+        }
+        msg .= (msg = "" ? "" : ", ") "trang " n " ctl bù " dy "px"
+    }
+    if (DebugOn && msg != "")
+        DLog("GUI thẻ: " msg)
+}
+
+; Ghi hình học thẻ Buff vào log để nghiệm thu: dòng nào đang hiện, nằm ở đâu, có bị che/khuất không
+GuiGeomLog(nB) {
+    global SettingsGui, GuiCtl, DebugOn, BuffCount, BuffEditN
+    if !DebugOn
+        return
+    st := ""
+    try {
+        tabC := SettingsGui["SysTabControl321"]
+        tx := "", ty := "", tw := "", th := ""
+        tabC.GetPos(&tx, &ty, &tw, &th)
+        tabC.Value := 3
+        Sleep 150
+        st := "thẻ=" tx "," ty " " tw "x" th
+        loop nB {
+            c := GuiCtl["B" A_Index "_Enabled"]
+            x := "", y := "", w := "", h := ""
+            c.GetPos(&x, &y, &w, &h)
+            st .= " | B" A_Index " y=" y " '" StrReplace(c.Text, ": phím", "") "'"
+                . (DllCall("IsWindowVisible", "Ptr", c.Hwnd, "Int") ? " hiện" : " ẨN")
+        }
+        tabC.Value := 1
+    } catch as e {
+        st .= " (lỗi " e.Message ")"
+    }
+    st .= " || Count=" BuffCount " EditN=" BuffEditN " k1=" BuffRowVal(1, "Key")
+        . " k2=" (nB >= 2 ? BuffRowVal(2, "Key") : "")
+    DLog("GUI Buff: " nB " dòng | " st)
+}
+; Thêm/bớt 1 dòng buff trong thẻ Buff: chỉ đổi số dòng đang hiện, bấm LƯU mới ghi vào ini
+BuffRowDelta(d) {
+    global BuffEditN, BuffCountMax, SettingsGui, BuffDraft, GuiCtl
+    base := BuffEditN >= 1 ? BuffEditN : BuffCount
+    n := Max(1, Min(BuffCountMax, base + d))
+    if n = base {
+        if (d > 0 && base >= BuffCountMax)
+            ToolTip("Tối đa " BuffCountMax " dòng buff."), SetTimer(() => ToolTip(), -1500)
+        return
+    }
+    ; giữ lại giá trị đang sửa (chưa LƯU) trước khi dựng lại cửa sổ
+    BuffDraft := Map()
+    loop base {
+        i := A_Index, pre := "B" i "_"
+        if !GuiCtl.Has(pre "Key")
+            continue
+        BuffDraft[i "|Enabled"] := GuiCtl[pre "Enabled"].Value ? "1" : "0"
+        BuffDraft[i "|Key"] := Trim(GuiCtl[pre "Key"].Value)
+        BuffDraft[i "|EverySec"] := Trim(GuiCtl[pre "EverySec"].Value)
+        BuffDraft[i "|WaitSec"] := Trim(GuiCtl[pre "WaitSec"].Value)
+        v := GuiCtl[pre "Action"].Value
+        BuffDraft[i "|Action"] := v = 3 ? "esc" : v = 2 ? "all" : "unapplied"
+    }
+    BuffEditN := n
+    if IsObject(SettingsGui) {
+        try SettingsGui.Destroy()
+        SettingsGui := ""
+    }
+    ShowSettings()
 }
 
 ResetTimersBtn(*) {
@@ -1013,7 +1462,7 @@ SaveSettings(*) {
             return
         }
     }
-    loop 2 {
+    loop GuiCtl["bufN"] {
         pre := "B" A_Index "_"
         for k in ["EverySec", "WaitSec"] {
             if !IsNumber(Trim(GuiCtl[pre k].Value)) || Number(Trim(GuiCtl[pre k].Value)) < 0 {
@@ -1056,55 +1505,85 @@ SaveSettings(*) {
     n := 0
     lines := []
     for r in GuiCtl["rows"] {
-        key := Trim(r[1].Value)
-        if key = ""
-            continue
-        cd := Trim(r[2].Value)
-        row := Trim(r[3].Value) = "" ? "0" : Trim(r[3].Value)
-        col := Trim(r[4].Value) = "" ? "0" : Trim(r[4].Value)
-        if !IsNumber(cd) || Number(cd) <= 0 || !IsInteger(row) || Integer(row) < 0 || Integer(row) > 2 || !IsInteger(col) || Integer(col) < 0 {
-            MsgBox "Dòng skill '" key "' có giá trị không hợp lệ.`nCooldown phải > 0, hàng ô là 0/1/2, cột ô là số nguyên >= 0.", "Maple Auto", "Icon!"
+        fx := r["fixed"]
+        if fx[1] != "" {
+            key := fx[1], row := String(fx[2]), col := String(fx[3])
+        } else {
+            key := StrLower(Trim(r["e1"].Value))
+            if key = ""
+                continue
+            row := Trim(r["oldRow"]), col := Trim(r["oldCol"])
+            if !IsInteger(row) || Integer(row) < 0 || Integer(row) > 2 || !IsInteger(col) || Integer(col) < 0
+                row := "0", col := "0"
+        }
+        cd := Trim(r["e2"].Value)
+        if cd = ""
+            cd := "60"           ; dòng để trống cooldown thì dùng 60 giây, không chặn việc lưu
+        else if !IsNumber(cd) || Number(cd) <= 0 {
+            MsgBox "Dòng skill '" key "' có cooldown không hợp lệ (phải > 0).", "Maple Auto", "Icon!"
             return
         }
-        lines.Push(key "|" cd "|" row "|" col "|" (r[5].Value ? 1 : 0) "|" (r[6].Value ? 1 : 0) "|" (r[7].Value ? 1 : 0))
+        lines.Push(key "|" cd "|" row "|" col "|" (r["c5"].Value ? 1 : 0) "|" (r["c6"].Value ? 1 : 0) "|" (r["c0"].Value ? 1 : 0))
     }
-    IniWrite GuiCtl["ShowHud"].Value, IniFile, "General", "ShowHud"
-    IniWrite GuiCtl["ReOn"].Value, IniFile, "Relogin", "Enabled"
-    IniWrite Trim(GuiCtl["ReLauncher"].Value), IniFile, "Relogin", "LauncherPath"
-    IniWrite Trim(GuiCtl["ReChannel"].Value), IniFile, "Relogin", "Channel"
-    IniWrite Trim(GuiCtl["ReLost"].Value), IniFile, "Relogin", "LostSec"
-    IniWrite GuiCtl["DebugOn"].Value, IniFile, "Debug", "Enabled"
-    IniWrite Trim(GuiCtl["DebugMax"].Value), IniFile, "Debug", "MaxEvents"
-    for k in ["ToggleKey", "MainKey", "MainTapMs", "GameExe", "GameClass", "RandMin", "RandMax", "RepMax"]
-        IniWrite Trim(GuiCtl[k].Value), IniFile, "General", k
-    IniWrite Trim(GuiCtl["GameResW"].Value), IniFile, "Detect", "GameResW"
-    IniWrite Trim(GuiCtl["RefW"].Value), IniFile, "Detect", "RefW"
-    IniWrite Trim(GuiCtl["RefH"].Value), IniFile, "Detect", "RefH"
-    IniWrite (GuiCtl["SlotScale"].Value = 2 ? "stretch" : GuiCtl["SlotScale"].Value = 3 ? "native" : "uniform"), IniFile, "Detect", "SlotScale"
-    IniWrite (GuiCtl["MainMode"].Value = 2 ? "tap" : "hold"), IniFile, "General", "MainMode"
-    IniWrite GuiCtl["UseSlotCheck"].Value, IniFile, "Detect", "UseSlotCheck"
-    IniWrite Trim(GuiCtl["FocusSec"].Value), IniFile, "General", "FocusSec"
-    IniWrite GuiCtl["AutoFocus"].Value, IniFile, "General", "AutoFocus"
-    loop 2 {
-        pre := "B" A_Index "_"
-        sec := A_Index = 1 ? "Buff" : "Buff2"
-        IniWrite GuiCtl[pre "Enabled"].Value, IniFile, sec, "Enabled"
-        IniWrite Trim(GuiCtl[pre "Key"].Value), IniFile, sec, "Key"
-        IniWrite Trim(GuiCtl[pre "EverySec"].Value), IniFile, sec, "EverySec"
-        IniWrite Trim(GuiCtl[pre "WaitSec"].Value), IniFile, sec, "WaitSec"
-        v := GuiCtl[pre "Action"].Value
-        IniWrite (v = 3 ? "esc" : v = 2 ? "all" : "unapplied"), IniFile, sec, "Action"
+    try {
+        IniWrite GuiCtl["ShowHud"].Value, IniFile, "General", "ShowHud"
+        IniWrite GuiCtl["ReOn"].Value, IniFile, "Relogin", "Enabled"
+        IniWrite Trim(GuiCtl["ReLauncher"].Value), IniFile, "Relogin", "LauncherPath"
+        IniWrite Trim(GuiCtl["ReChannel"].Value), IniFile, "Relogin", "Channel"
+        IniWrite Trim(GuiCtl["ReLost"].Value), IniFile, "Relogin", "LostSec"
+        IniWrite GuiCtl["DebugOn"].Value, IniFile, "Debug", "Enabled"
+        IniWrite Trim(GuiCtl["DebugMax"].Value), IniFile, "Debug", "MaxEvents"
+        for k in ["ToggleKey", "MainKey", "MainTapMs", "GameExe", "GameClass", "RandMin", "RandMax", "RepMax"]
+            IniWrite Trim(GuiCtl[k].Value), IniFile, "General", k
+        IniWrite Trim(GuiCtl["GameResW"].Value), IniFile, "Detect", "GameResW"
+        IniWrite Trim(GuiCtl["RefW"].Value), IniFile, "Detect", "RefW"
+        IniWrite Trim(GuiCtl["RefH"].Value), IniFile, "Detect", "RefH"
+        rl := Trim(GuiCtl["RelearnMin"].Value)
+        IniWrite (IsNumber(rl) && Number(rl) >= 0 ? rl : "5"), IniFile, "Detect", "RelearnMin"
+        IniWrite (GuiCtl["SlotScale"].Value = 2 ? "stretch" : GuiCtl["SlotScale"].Value = 3 ? "native" : "uniform"), IniFile, "Detect", "SlotScale"
+        IniWrite (GuiCtl["MainMode"].Value = 2 ? "tap" : "hold"), IniFile, "General", "MainMode"
+        IniWrite GuiCtl["UseSlotCheck"].Value, IniFile, "Detect", "UseSlotCheck"
+        IniWrite Trim(GuiCtl["FocusSec"].Value), IniFile, "General", "FocusSec"
+        IniWrite GuiCtl["AutoFocus"].Value, IniFile, "General", "AutoFocus"
+        IniWrite GuiCtl["bufN"], IniFile, "Buff", "Count"
+        loop GuiCtl["bufN"] {
+            pre := "B" A_Index "_"
+            sec := BuffSec(A_Index)
+            IniWrite GuiCtl[pre "Enabled"].Value, IniFile, sec, "Enabled"
+            IniWrite Trim(GuiCtl[pre "Key"].Value), IniFile, sec, "Key"
+            IniWrite Trim(GuiCtl[pre "EverySec"].Value), IniFile, sec, "EverySec"
+            IniWrite Trim(GuiCtl[pre "WaitSec"].Value), IniFile, sec, "WaitSec"
+            v := GuiCtl[pre "Action"].Value
+            IniWrite (v = 3 ? "esc" : v = 2 ? "all" : "unapplied"), IniFile, sec, "Action"
+        }
+        loop BuffCountMax {            ; bớt dòng thì xoá cấu hình của các dòng dư
+            if A_Index <= GuiCtl["bufN"]
+                continue
+            for k in ["Enabled", "Key", "EverySec", "WaitSec", "Action"]
+                IniDelete IniFile, BuffSec(A_Index), k
+        }
+        IniWrite GuiCtl["AlwaysManual"].Value, IniFile, "Buff", "AlwaysManual"
+        if IsObject(NewBtn) {
+            IniWrite NewBtn[1], IniFile, "Buff", "BtnDX"
+            IniWrite NewBtn[2], IniFile, "Buff", "BtnDY"
+        }
+        loop MaxSkillRows
+            IniDelete IniFile, "Skills", "Skill" A_Index
+        for i, l in lines
+            IniWrite l, IniFile, "Skills", "Skill" i
+    } catch as err {
+        MsgBox "Không ghi được file cài đặt (có thể file đang bị khoá):`n" IniFile "`n`n" err.Message, "Maple Auto", "Icon!"
+        return
     }
-    IniWrite GuiCtl["AlwaysManual"].Value, IniFile, "Buff", "AlwaysManual"
-    if IsObject(NewBtn) {
-        IniWrite NewBtn[1], IniFile, "Buff", "BtnDX"
-        IniWrite NewBtn[2], IniFile, "Buff", "BtnDY"
+    ; đọc lại để chắc chắn đã ghi được (nếu ghi hụt thì báo ngay, không im lặng khởi động lại)
+    if IniRead(IniFile, "General", "ToggleKey", "") != Trim(GuiCtl["ToggleKey"].Value) {
+        MsgBox "Ghi cài đặt KHÔNG thành công:`n" IniFile "`n`nHãy kiểm tra quyền ghi file rồi bấm LƯU lại.", "Maple Auto", "Icon!"
+        return
     }
-    loop MaxSkillRows
-        IniDelete IniFile, "Skills", "Skill" A_Index
-    for i, l in lines
-        IniWrite l, IniFile, "Skills", "Skill" i
-    Send "{" MainKey " up}"
+    try Send "{" MainKey " up}"
+    ToolTip "Đã lưu cài đặt - đang khởi động lại..."
+    SetTimer () => ToolTip(), -1200
+    Sleep 250
     Reload
 }
 
@@ -1282,9 +1761,10 @@ QsBuf := ""
 QsX := 0, QsY := 0, QsW := 0, QsH := 0
 QsCx := 0, QsCy := 0, QsCw := 0, QsCh := 0
 QsAt := 0, QsOk := false, QsFails := 0, QsOff := false, QsLogged := 0, QsLastSlow := 0
+QsGeomSig := ""
 
 QsCapture(cx, cy, cw, ch, kx, ky, force := false) {
-    global QsBuf, QsX, QsY, QsW, QsH, QsCx, QsCy, QsCw, QsCh, QsAt, QsOk, QsFails, QsOff, QsLogged, QsLastSlow
+    global QsBuf, QsX, QsY, QsW, QsH, QsCx, QsCy, QsCw, QsCh, QsAt, QsOk, QsFails, QsOff, QsLogged, QsLastSlow, QsGeomSig
     if !UseBatch || QsOff
         return false
     if !force && QsOk && A_TickCount - QsAt <= 80 && QsCx = cx && QsCy = cy && QsCw = cw && QsCh = ch
@@ -1357,9 +1837,11 @@ QsCapture(cx, cy, cw, ch, kx, ky, force := false) {
     d := PerfNow() - t
     if DebugOn {
         PerfAdd("chụp_dải_ô", d)
-        if QsLogged < 3 {
+        sig := x "," y "," w "," h
+        if QsGeomSig != sig {
+            QsGeomSig := sig
             QsLogged += 1
-            DLog("QS: chụp gộp dải quickslot " w "x" h " tại (" x "," y ") mất " Round(d, 1) "ms " (ok ? "OK" : "LỖI"))
+            DLog("QS: vùng chụp đổi -> " w "x" h " tại (" x "," y ") mất " Round(d, 1) "ms " (ok ? "OK" : "LỖI") "  (client " cw "x" ch " tại " cx "," cy "  kx=" Round(kx, 3) " ky=" Round(ky, 3) "  lần " QsLogged ")")
         } else if d > 300 && A_TickCount - QsLastSlow > 2000 {
             QsLastSlow := A_TickCount
             DLog("QS: chụp gộp chậm " Round(d) "ms")
@@ -1426,6 +1908,15 @@ SampleToStr(a) {
     return out
 }
 
+; Mẫu toàn điểm sáng gần trắng = nháy trắng lúc vừa hồi chiêu xong
+SampleIsWhite(c) {
+    for p in c {
+        if Min(p[1], p[2], p[3]) < 175 || Max(p[1], p[2], p[3]) - Min(p[1], p[2], p[3]) > 60
+            return false
+    }
+    return c.Length > 0
+}
+
 StrToSample(str) {
     out := []
     for part in StrSplit(str, ";") {
@@ -1473,6 +1964,51 @@ DebugSlots() {
     SetTimer () => ToolTip(), -8000
 }
 
+; Ô đã rời màu hồi chiêu (khác cdSample) và giữ nguyên >= 2 giây -> lấy màu đó làm màu "sẵn sàng".
+; KHÔNG bao giờ lấy màu đang hồi chiêu: nếu mẫu trùng màu hồi chiêu đã biết hoặc là nháy trắng thì bỏ qua.
+RelearnSlot(s, cur) {
+    global Base, SlotIni, Relearns, RelearnMs, VerifyDist
+    if !IsObject(cur)
+        return false
+    now := A_TickCount
+    if now - s.Get("relearnAt", 0) < 30000        ; mỗi phím học lại tối đa 1 lần / 30 giây
+        return false
+    if SampleIsWhite(cur)
+        return false
+    if IsObject(s["cdSample"]) && SampleDist(cur, s["cdSample"]) <= VerifyDist
+        return false
+    old := Base.Has(s["key"]) ? SampleToStr(Base[s["key"]]) : "(chưa có)"
+    if Base.Has(s["key"]) && SampleDist(cur, Base[s["key"]]) <= VerifyDist
+        return false                               ; vẫn là màu cũ -> không cần học lại
+    Base[s["key"]] := cur
+    try IniWrite SampleToStr(cur), SlotIni, "Band", s["key"]
+    try IniWrite FormatTime(, "dd/MM HH:mm:ss"), SlotIni, "Time", s["key"]
+    s["relearnAt"] := now
+    ResetSlotGuard(s, true)          ; màu mới = màu hiện tại nên ô này coi như sẵn sàng
+    Relearns += 1
+    DLog("TỰ HỌC LẠI MÀU: " StrUpper(s["key"]) " ô hàng " s["slot"][2] " cột " s["slot"][1] " đã rời màu hồi chiêu -> cập nhật màu chuẩn (lần " Relearns ") | cũ: " old " | mới: " SampleToStr(cur))
+    return true
+}
+
+; Vừa đổi màu chuẩn của ô -> xoá mọi trạng thái bảo vệ cũ để phím hoạt động lại ngay.
+; ready = true: màu mới là màu hiện tại của ô nên coi như ô đang sẵn sàng.
+ResetSlotGuard(s, ready) {
+    s["coolSince"] := 0
+    s["diffSince"] := 0
+    s["stuckWarn"] := 0
+    s["blocked"] := 0
+    s["fails"] := 0
+    s["retries"] := 0
+    s["probe"] := false
+    s["force"] := false
+    s["cdAt"] := 0
+    s["cdSample"] := ""             ; màu hồi chiêu cũ không còn tin được -> học lại từ đầu
+    s["stuckPress"] := 0
+    s["overSince"] := 0
+    if ready
+        s["st"] := 1
+}
+
 ; Lưu màu hiện tại của các ô làm màu "sẵn sàng". Trả về chuỗi kết quả.
 CalibrateSlots() {
     txt := ""
@@ -1488,6 +2024,7 @@ CalibrateSlots() {
         Base[s["key"]] := cur
         IniWrite SampleToStr(cur), SlotIni, "Band", s["key"]
         IniWrite ts, SlotIni, "Time", s["key"]
+        ResetSlotGuard(s, true)
         txt .= StrUpper(s["key"]) ": OK`n"
     }
     return txt
@@ -1516,9 +2053,14 @@ ListSkills() {
     if !IsObject(GuiCtl) || !GuiCtl.Has("rows")
         return out
     for r in GuiCtl["rows"] {
-        key := StrLower(Trim(r[1].Value))
-        row := Trim(r[3].Value)
-        col := Trim(r[4].Value)
+        fx := r["fixed"]
+        if fx[1] != "" {
+            out.Push(Map("key", fx[1], "slot", [fx[3], fx[2]]))
+            continue
+        }
+        key := StrLower(Trim(r["e1"].Value))
+        row := Trim(r["oldRow"])
+        col := Trim(r["oldCol"])
         if key = "" || !IsInteger(row) || !IsInteger(col) || Integer(row) < 1 || Integer(row) > 2 || Integer(col) < 0
             continue
         out.Push(Map("key", key, "slot", [Integer(col), Integer(row)]))
@@ -1642,6 +2184,10 @@ SaveOne(i, *) {
     Base[key] := r["pend"]
     IniWrite SampleToStr(r["pend"]), SlotIni, "Band", key
     IniWrite FormatTime(, "dd/MM HH:mm:ss"), SlotIni, "Time", key
+    for sk in Skills {
+        if sk["key"] = key
+            ResetSlotGuard(sk, true)
+    }
     r["pend"] := ""
     RefreshRow(i)
     ToolTip "Đã lưu màu chuẩn phím " StrUpper(key), 20, 20, 4
@@ -1686,22 +2232,82 @@ ScanSlots() {
 }
 
 ScanSlotsInner() {
-    global ScanMs, ScanAt
+    global ScanMs, ScanAt, RelearnMs
     if !Enabled || Paused() || BuffBusy
         return
     if !IsGameActive() {
-        for s in Skills
+        for s in Skills {
             s["st"] := -1
+            s["coolSince"] := 0
+        }
         return
     }
     t0 := A_TickCount
     for s in Skills {
-        if !(UseSlotCheck && s.Has("slot"))
+        read := false
+        cur := ""
+        if !(UseSlotCheck && s.Has("slot")) {
             s["st"] := -1
-        else if t0 < s["press"] + s["cd"] * 500
+        } else if t0 < s["press"] + s["cd"] * 500 {
             s["st"] := 0        ; chắc chắn còn hồi chiêu: không cần đọc ô (đọc điểm ảnh rất chậm trong sandbox)
-        else
-            s["st"] := SlotState(s)
+        } else {
+            cur := SlotSample(s)
+            if IsObject(cur) {
+                s["st"] := !Base.Has(s["key"]) ? -1 : (SampleDist(cur, Base[s["key"]]) <= ReadyDist ? 1 : 0)
+                read := true
+            } else {
+                s["st"] := -1
+            }
+        }
+        ; ===== Tự học lại màu ô =====
+        ; Màu ô chụp ngay sau lần ấn thành công (cdSample) = màu lúc đang hồi chiêu.
+        ; Ô khác hẳn màu đó và giữ nguyên >= 2 giây mà mình không ấn -> đó là màu lúc SẴN SÀNG.
+        ; Chưa biết màu hồi chiêu (cdSample trống) thì chỉ dám học khi bộ đếm đã quá hạn cooldown
+        ; >= 10 giây - lúc đó chắc chắn ô không còn hồi chiêu nên không thể học nhầm.
+        if read && s["st"] = 0 && RelearnMs > 0 {
+            overDue := s["press"] > 0 && t0 > s["press"] + s["cd"] * 1000 + 10000
+            hadCd := IsObject(s["cdSample"])
+            if hadCd ? (SampleDist(cur, s["cdSample"]) > VerifyDist) : overDue {
+                if !s.Get("diffSince", 0)
+                    s["diffSince"] := t0
+                else if t0 - s["diffSince"] >= 2000 {
+                    if RelearnSlot(s, cur) && !hadCd
+                        DLog("MÀU CHUẨN SAI: " StrUpper(s["key"]) " đã quá cooldown " Round((t0 - s["press"]) / 1000) "s mà ô vẫn báo hồi chiêu -> lấy màu hiện tại làm màu sẵn sàng.")
+                }
+            } else
+                s["diffSince"] := 0
+        } else {
+            s["diffSince"] := 0
+        }
+        ; Ô bị coi là hồi chiêu quá lâu: KHÔNG tự đổi màu chuẩn (dễ học nhầm màu hồi chiêu -> ấn liên tục -> bị đăng xuất).
+        ; Chỉ tạm ngừng ấn phím đó + ghi cảnh báo để người dùng lấy lại màu trong F5.
+        ; Chỉ áp dụng khi phím đã từng được ấn: chưa ấn lần nào thì "quá hạn" là vô nghĩa
+        ; (press = 0 sẽ khiến mọi phím bị coi là kẹt ngay khi vừa bật script).
+        if RelearnMs > 0 && read && s["st"] = 0 && s["press"] > 0 && t0 > s["press"] + s["cd"] * 2000 {
+            if !s.Get("coolSince", 0)
+                s["coolSince"] := t0
+            else if t0 - s["coolSince"] >= RelearnMs && !s.Get("stuckWarn", 0) {
+                if !IsObject(s["cdSample"]) {
+                    ; chưa biết màu lúc hồi chiêu -> ấn THỬ 1 lần để lấy mẫu (không ấn dồn dập, mỗi lần cách nhau RelearnMs)
+                    s["probe"] := true
+                    s["force"] := true
+                    s["coolSince"] := t0
+                    s["next"] := t0
+                    DLog("THỬ LẠI " StrUpper(s["key"]) ": ô bị coi là hồi chiêu > " Round(RelearnMs / 60000, 1) " phút nhưng CHƯA biết màu hồi chiêu -> ấn thử 1 lần để lấy mẫu màu hồi chiêu.")
+                } else {
+                    s["stuckWarn"] := 1
+                    s["blocked"] := t0 + Max(600000, RelearnMs * 2)
+                    DLog("!!! KHÔNG ĐỌC ĐƯỢC Ô " StrUpper(s["key"]) ": bị coi là hồi chiêu > " Round(RelearnMs / 60000, 1) " phút -> TẠM NGỪNG ấn phím này " Round(Max(600000, RelearnMs * 2) / 60000) " phút để không bị đăng xuất. Mở F5 > Màu chuẩn ô > Lấy lại màu cho " StrUpper(s["key"]) ".")
+                }
+            }
+        } else if read && s["st"] = 1 {
+            s["coolSince"] := 0
+            s["stuckWarn"] := 0
+            s["blocked"] := 0
+            s["stuckPress"] := 0
+        } else if !read {
+            s["coolSince"] := 0
+        }
     }
     ScanMs := A_TickCount - t0
     ScanAt := A_TickCount
@@ -1768,7 +2374,9 @@ UpdateHud() {
         for s in Skills {
             k := StrUpper(s["key"])
             if UseSlotCheck && s.Has("slot") {
-                if s["force"] {                                ; ấn mà chưa ra, đang thử lại
+                if s.Get("blocked", 0) > now {                 ; tạm ngừng ấn (ấn mãi không ra / ô đọc sai)
+                    cool .= k "⛔ "
+                } else if s["force"] {                                ; ấn mà chưa ra, đang thử lại
                     ready .= k "↻" (s["next"] > now ? "(" Ceil((s["next"] - now) / 1000) "s)" : "") " "
                 } else if s["flash"] > s["press"] {            ; vừa thấy nháy trắng
                     extra := (s["wait"] > now) ? "(" Ceil((s["wait"] - now) / 1000) "s)" : ""
@@ -1776,6 +2384,8 @@ UpdateHud() {
                 } else if Base.Has(s["key"]) && s["st"] >= 0 {
                     if ColorReady(s, now)
                         ready .= k " "
+                    else if s["st"] = 0 && (s["press"] = 0 || now >= s["tmr"])
+                        ready .= k "(bộ đếm) "                    ; ô kẹt: vẫn ấn theo bộ đếm cooldown
                     else
                         cool .= k " "
                 } else if now >= s["tmr"] {
@@ -1791,6 +2401,10 @@ UpdateHud() {
         }
     }
     txt := "AUTO: BẬT" (active ? "" : "  - TẠM DỪNG (chưa focus game)") "`n"
+    if CfgWarn != ""
+        txt .= "!!! CẤU HÌNH: " CfgWarn "`n"
+    if RatioWarn != ""
+        txt .= "!!! TỈ LỆ: " RatioWarn "`n"
     if active {
         for bf in Buffs {
             if bf["enabled"] && bf["key"] != ""
@@ -1801,7 +2415,7 @@ UpdateHud() {
         txt .= "SẴN SÀNG: " (ready = "" ? "-" : RTrim(ready)) "`n"
         txt .= "HỒI CHIÊU: " (cool = "" ? "-" : RTrim(cool)) "`n"
     }
-    txt .= FormatTime(, "HH:mm:ss") "  quét ô " ScanMs "ms  nháy " FlashMs "ms  F1:" F1Count "  PID " ProcessExist() "  vòng:" LoopTicks "`n"
+    txt .= FormatTime(, "HH:mm:ss") "  quét ô " ScanMs "ms  nháy " FlashMs "ms  F1:" F1Count "  PID " ProcessExist() "  vòng:" LoopTicks "  tự học lại:" Relearns "`n"
     if LastErr != ""
         txt .= "LỖI: " LastErr "`n"
     inst := InstanceCount()
@@ -1865,7 +2479,14 @@ ColorReady(s, now) {
 }
 
 CheckVerify() {
+    global VerifyOk, VerifyFail, VerifyOkAt
     for s in Skills {
+        if s.Get("cdAt", 0) && A_TickCount >= s["cdAt"] {
+            s["cdAt"] := 0
+            c := SlotSample(s)
+            if IsObject(c)
+                s["cdSample"] := c      ; màu ô khi hồi chiêu đã ổn định (bỏ hiệu ứng loé lúc vừa ấn)
+        }
         if !s.Has("slot") || s.Get("vat", 0) = 0 || A_TickCount < s["vat"]
             continue
         s["vat"] := 0
@@ -1874,6 +2495,24 @@ CheckVerify() {
         verdict := 0
         if IsObject(before) && IsObject(after)
             verdict := SampleDist(before, after) >= VerifyDist ? 1 : -1
+        vp := s.Get("probe", 0)
+        if verdict = 1 {
+            VerifyOk += 1
+            s["cdSample"] := after        ; màu ô lúc ĐANG hồi chiêu (mốc để tự học lại màu ô)
+            s["cdAt"] := A_TickCount + 1500 ; lấy thêm 1 mẫu lúc hồi chiêu đã ổn định (bỏ hiệu ứng vừa ấn)
+            s["probe"] := false
+            s["fails"] := 0
+            VerifyOkAt := A_TickCount
+        } else if verdict = -1 {
+            VerifyFail += 1
+            if vp {                     ; ấn thử để lấy màu hồi chiêu mà không ra skill: KHÔNG thử lại dồn dập
+                s["probe"] := false
+                s["force"] := false
+                s["fails"] := 0
+                s["retries"] := 0
+                s["next"] := A_TickCount + RetryGapMs
+            }
+        }
         mark := verdict = 1 ? " ✓" : (verdict = -1 ? " ✗" : "")
         DLog("KIỂM TRA " StrUpper(s["key"]) ": " (verdict = 1 ? "ra skill ✓" : verdict = -1 ? "KHÔNG ra ✗ (lần thử " (s["retries"] + 1) ")" : "không rõ"))
         for i, line in PressLog {
@@ -1884,10 +2523,17 @@ CheckVerify() {
         }
         if verdict = 1
             s["seen"] := true       ; đã thấy dải hồi chiêu xuất hiện: từ giờ tin màu ô, không cần chờ đủ cooldown cấu hình
-        if verdict = -1 && s["vhow"] != "hẹn giờ" {
+        if verdict = -1 && s["vhow"] != "hẹn giờ" && !vp {
             s["retries"] += 1
+            s["fails"] += 1
             s["force"] := true
-            s["next"] := A_TickCount + (s["retries"] <= MaxRetry ? RetryGapMs : SlowRetryMs)
+            ; giãn cách tăng dần: ấn dồn dập khi ô đọc sai dễ bị đăng xuất
+            s["next"] := A_TickCount + (s["fails"] <= MaxRetry ? RetryGapMs : Min(300000, SlowRetryMs * (2 ** Min(s["fails"] - MaxRetry, 4))))
+            if s["fails"] >= 5 {
+                s["blocked"] := A_TickCount + 600000
+                s["retries"] := 0
+                DLog("!!! TẠM NGỪNG ẤN " StrUpper(s["key"]) ": " s["fails"] " lần ấn liên tiếp KHÔNG ra skill -> dừng ấn phím này 10 phút để tránh bị đăng xuất. Kiểm tra phím/ô của " StrUpper(s["key"]) " trong F5.")
+            }
         } else {
             s["retries"] := 0
         }
@@ -1898,9 +2544,16 @@ CheckVerify() {
 ; Skill ấn mãi không ra (nhiều skill cùng thất bại liên tiếp) = nhiều khả năng chưa thực sự vào game
 ; (kẹt ở màn đăng nhập/chọn kênh/tải, hoặc game treo) -> chuyển sang xử lý kẹt: kiểm tra màn hình, vào game tiếp, không được thì đóng game đăng nhập lại
 SkillStuckCheck() {
-    global SkillRecoverTimes, SkillRecoverBusy
+    global SkillRecoverTimes, SkillRecoverBusy, VerifyOkAt
     if !ReloginOn || Relogging || SkillRecoverBusy || !Enabled
         return
+    ; Vẫn còn skill "ra ✓" trong 2 phút qua = đang ở trong game, lỗi chỉ ở 1-2 phím/ô
+    ; -> KHÔNG chạy quy trình đăng nhập lại (dễ bị đăng xuất oan).
+    if VerifyOkAt && A_TickCount - VerifyOkAt < 120000 {
+        for s in Skills
+            s["retries"] := 0
+        return
+    }
     bad := 0, tot := 0, names := ""
     for s in Skills {
         if !s.Has("slot")
@@ -2561,6 +3214,7 @@ Loop1() {
     }
 
     CheckVerify()
+    FrameCheck()
     ; Bảng buff/EXP Coupon đang chặn game thì mọi phím đều vô tác dụng: tắt nó trước (kiểm tra mỗi 1,5 giây)
     if A_TickCount >= GuardNext {
         GuardNext := A_TickCount + 1500
@@ -2598,6 +3252,16 @@ Loop1() {
         now := A_TickCount
         slotMode := UseSlotCheck && s.Has("slot")
         how := "hẹn giờ"
+        if s.Get("blocked", 0) > now       ; đang tạm ngừng ấn phím này (tránh ấn quá nhiều lần -> bị đăng xuất)
+            continue
+        if s.Get("blocked", 0) {           ; vừa hết hạn tạm ngừng -> dọn trạng thái để phím được thử lại
+            s["blocked"] := 0
+            s["stuckWarn"] := 0
+            s["coolSince"] := 0
+            s["cdSample"] := ""            ; màu hồi chiêu cũ không còn tin được -> học lại từ đầu
+            s["st"] := -1
+            DLog("HẾT TẠM NGỪNG " StrUpper(s["key"]) ": thử lại phím này. Nếu vẫn báo hồi chiêu sai, mở F5 > Màu chuẩn ô > Lấy lại màu.")
+        }
         if slotMode {
             if now < s["next"]
                 continue
@@ -2610,8 +3274,23 @@ Loop1() {
             } else if Base.Has(s["key"]) && s["st"] >= 0 {
                 ; màu ô (so với màu chuẩn đã lưu): dải xám hết = sẵn sàng, không chờ đủ cooldown đã nhập
                 if !ColorReady(s, now) {
-                    s["wait"] := 0
-                    continue
+                    ; Ô báo hồi chiêu nhưng chưa ấn lần nào, hoặc bộ đếm cooldown đã hết từ lâu -> nhiều khả năng
+                    ; màu chuẩn cũ không còn đúng (đổi cửa sổ / độ phân giải). Vẫn ấn theo bộ đếm để phím
+                    ; không bị "chết", mỗi lần cách nhau ít nhất cd + 3 giây nên không ấn dồn dập.
+                    if s["st"] = 0 && (s["press"] = 0 || now >= s["tmr"]) {
+                        if s["press"] > 0 {
+                            how := "bộ đếm (ô kẹt)"
+                            if !s.Get("stuckPress", 0)
+                                DLog("Ô KẸT: " StrUpper(s["key"]) " vẫn báo hồi chiêu dù bộ đếm đã hết " Round((now - s["tmr"]) / 1000) "s -> ấn theo bộ đếm. Nếu lặp lại, mở F5 > Màu chuẩn ô > Lấy lại màu.")
+                            s["stuckPress"] := s.Get("stuckPress", 0) + 1
+                        } else
+                            how := "chưa ấn lần nào"
+                    } else {
+                        ; Còn hồi chiêu thật: xoá hẹn giờ giữ, khi nào ô sẵn sàng thì giữ lại 2 giây.
+                        ; KHÔNG xoá s["wait"] ở nhánh "ô kẹt" ở trên, nếu xoá thì mỗi vòng lại hẹn lại -> không bao giờ ấn.
+                        s["wait"] := 0
+                        continue
+                    }
                 }
                 if s["wait"] = 0 {
                     s["wait"] := now + ReadyHoldMs + Random(RandMin, RandMax)
@@ -2619,7 +3298,8 @@ Loop1() {
                 }
                 if now < s["wait"]
                     continue
-                how := "màu ô"
+                if how = "hẹn giờ"
+                    how := "màu ô"
             } else if now < s["tmr"] {                     ; chưa có màu chuẩn (chưa lấy màu chuẩn) hoặc không đọc được: dùng bộ đếm cooldown
                 continue
             }
@@ -3748,8 +4428,16 @@ SetTimer TmrScan, CheckEveryMs
 SetTimer TmrFlash, FlashEveryMs
 SetTimer TmrHud, 500
 if DebugOn {
+    StartupLog()
     SetTimer PerfReport, 30000
-    SetTimer PerfFirstEnv, -4000
+    SetTimer PerfFirstEnv, -2000
 }
 
-OnExit (*) => Send("{" MainKey " up}")
+OnExit(OnExitLog)
+
+OnExitLog(*) {
+    global VerifyOk, VerifyFail, CacheResets, CfgWarn, RatioWarn, MainKey, DebugCount, Relearns
+    DLog("=== KẾT THÚC: kiểm tra skill ✓" VerifyOk " ✗" VerifyFail " | tự học lại màu " Relearns " lần | cửa sổ game đổi " CacheResets " lần | cảnh báo cấu hình=" (CfgWarn = "" ? "không" : "CÓ: " CfgWarn) " | cảnh báo tỉ lệ=" (RatioWarn = "" ? "không" : "CÓ: " RatioWarn) " | tổng dòng log=" DebugCount " ===")
+    try Send("{" MainKey " up}")
+    return 0
+}
