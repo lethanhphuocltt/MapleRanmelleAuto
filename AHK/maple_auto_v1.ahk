@@ -13,14 +13,24 @@ CoordMode "Pixel", "Screen"
 CoordMode "ToolTip", "Screen"
 CoordMode "Mouse", "Screen"
 
+; Toạ độ điểm ảnh / BitBlt phải là pixel vật lý trên mọi màn hình (Windows scale 125/150%).
+; AHK v2 thường đã ở Per-Monitor; chỉ nâng cấp khi đang thấp hơn để tránh lệch toạ độ.
+try {
+    ctxDpi := DllCall("User32\GetThreadDpiAwarenessContext", "Ptr")
+    if DllCall("User32\GetAwarenessFromDpiAwarenessContext", "Ptr", ctxDpi, "Int") < 2
+        DllCall("User32\SetThreadDpiAwarenessContext", "Ptr", -4, "Ptr")
+}
+
 ; =====================================================================
 ;  MAPLE AUTO v1 (bản thử nghiệm: thêm TỰ ĐĂNG NHẬP LẠI khi văng game)
 ;  Bản sao riêng, KHÔNG đụng tới maple_auto.ahk: dùng file settings_v1.ini, slot_base_v1.ini, debug_v1.log, error_v1.log.
 ;  Đừng chạy cùng lúc với bản gốc (hai bản cùng ấn phím sẽ xung đột).
 ;  Mọi thiết lập nằm trong file settings_v1.ini (sửa tay hoặc ấn F5 để mở cửa sổ Cài đặt).
+;  Mọi số px trong script/ini được hiểu là px tại khung game RefW x RefH [Detect] -> khi cửa sổ game
+;  to/nhỏ hơn, script nhân hệ số theo trục (SlotScale = uniform | stretch | native).
 ;  Xem HUONG_DAN.txt để biết cách dùng.
 ; =====================================================================
-IniFile := A_ScriptDir "\settings_v1.ini"
+IniFile := A_ScriptDir "\settings_" IniRead(A_ScriptDir "\settings_v1.ini", "General", "Profile", "v1") ".ini"
 SlotIni := A_ScriptDir "\slot_base_v1.ini"   ; màu "sẵn sàng" của từng ô (lưu bằng nút "Lấy màu chuẩn" trong F5)
 
 ; Giá trị mặc định: [mục, tên, mặc định]
@@ -55,6 +65,9 @@ Defaults := [
     ["Buff", "AlwaysManual", "0"],          ; 1 = luôn bấm vị trí đã chọn; 0 = tự tìm nút bằng màu, không thấy mới dùng vị trí đã chọn               ; chờ sau khi bấm để buff được cast xong (giây)
     ["Detect", "UseSlotCheck", "1"],        ; 1 = đọc ô quickslot để biết hồi chiêu xong; 0 = chỉ dùng bộ đếm thời gian
     ["Detect", "GameResW", "0"],            ; độ rộng độ phân giải GAME nếu game bị phóng to (vd 1366); 0 = không phóng
+    ["Detect", "RefW", "0"],                ; vùng game lúc đo các số px (QS_*, BandPts, bảng buff); 0 = theo GameResW, rồi tự lấy vùng hiện tại
+    ["Detect", "RefH", "0"],                ; chiều cao tương ứng; 0 = 9/16 của RefW (rồi tự lấy vùng hiện tại)
+    ["Detect", "SlotScale", "uniform"],     ; uniform = phóng đều theo rộng (cũ); stretch = X theo rộng, Y theo cao; native = UI giữ nguyên px
     ["Detect", "QS_X0", "544"],             ; từ mép phải vùng game tới tâm ô cột đầu tiên
     ["Detect", "QS_DX", "35"],              ; khoảng cách giữa 2 ô
     ["Detect", "QS_Y1", "64"],              ; hàng trên cách mép dưới
@@ -159,6 +172,15 @@ if ToggleKey = ""
     ToggleKey := "F1"
 UseSlotCheck  := Cfg("Detect", "UseSlotCheck") = "1"
 GameResW      := Integer(Cfg("Detect", "GameResW"))
+RefW          := Integer(Cfg("Detect", "RefW"))
+RefH          := Integer(Cfg("Detect", "RefH"))
+if RefW <= 0
+    RefW := GameResW
+if RefH <= 0
+    RefH := RefW > 0 ? Round(RefW * 9 / 16) : 0
+SlotScale     := StrLower(Trim(Cfg("Detect", "SlotScale")))
+if SlotScale != "stretch" && SlotScale != "native"
+    SlotScale := "uniform"
 QS_X0         := Number(Cfg("Detect", "QS_X0"))
 QS_DX         := Number(Cfg("Detect", "QS_DX"))
 QS_Y1         := Number(Cfg("Detect", "QS_Y1"))
@@ -207,13 +229,21 @@ if DebugOn {
     DLog("=== script khởi động (tối đa " DebugMax " dòng) ===")
 }
 
+; Dấu thời gian có mili giây THẬT. Không dùng Mod(A_TickCount,1000): đó là ms từ lúc boot máy,
+; không khớp với giây của đồng hồ nên các dòng log bị nhảy lùi (vd 49.812 -> 49.937 -> 49.125).
+TsStr() {
+    static b := Buffer(16, 0)
+    DllCall("GetLocalTime", "Ptr", b)
+    return Format("{:02}:{:02}:{:02}.{:03}", NumGet(b, 8, "UShort"), NumGet(b, 10, "UShort"), NumGet(b, 12, "UShort"), NumGet(b, 14, "UShort"))
+}
+
 ; Ghi 1 sự kiện vào debug.log (chỉ khi bật trong F5). Giữ tối đa DebugMax dòng gần nhất.
 DLog(msg) {
     global DebugCount
     if !DebugOn
         return
     try {
-        FileAppend(FormatTime(, "HH:mm:ss") "." Format("{:03}", Mod(A_TickCount, 1000)) "  " msg "`n", DebugFile, "UTF-8")
+        FileAppend(TsStr() "  " msg "`n", DebugFile, "UTF-8")
         DebugCount += 1
         if DebugCount > DebugMax + 100 {        ; cắt bớt theo lô để không ghi lại file liên tục
             arr := StrSplit(RTrim(FileRead(DebugFile, "UTF-8"), "`n"), "`n")
@@ -317,6 +347,12 @@ MonDpi(x, y) {
     return 0
 }
 
+; Toàn bộ vùng ảo của mọi màn hình: [x, y, w, h] (x/y có thể âm nếu màn phụ nằm bên trái/trên màn chính)
+VirtualScreen() {
+    return [DllCall("GetSystemMetrics", "Int", 76), DllCall("GetSystemMetrics", "Int", 77)
+        , DllCall("GetSystemMetrics", "Int", 78), DllCall("GetSystemMetrics", "Int", 79)]
+}
+
 ; Chỉ số màn hình chứa tâm cửa sổ game (0 nếu không rõ)
 GameMonitor(hwnd) {
     try {
@@ -362,10 +398,10 @@ EnvDump() {
         }
         WinGetPos &wx, &wy, &ww, &wh, h
         WinGetClientPos &cx, &cy, &cw, &ch, h
-        k := Scale(cw)
+        kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
         m := GameMonitor(h)
-        DLog("ENV: game cửa sổ " ww "x" wh " tại (" wx "," wy ")  vùng client " cw "x" ch " tại (" cx "," cy ")  hệ số k=" Round(k, 3) " (GameResW=" GameResW ")  tỉ lệ client " Round(cw / Max(1, ch), 3) "  nằm trên màn " m "  DPI màn đó=" MonDpi(wx + ww // 2, wy + wh // 2) "  trạng thái=" WinGetMinMax(h) "  PID=" WinGetPID(h))
-        DLog("ENV: tâm client (" Round(cx + cw / 2) "," Round(cy + ch / 2) ")  ô quickslot đầu tiên cách mép phải " QS_X0 " px, mép dưới " QS_Y1 "/" QS_Y2 " px (khi k=1)")
+        DLog("ENV: game cửa sổ " ww "x" wh " tại (" wx "," wy ")  vùng client " cw "x" ch " tại (" cx "," cy ")  hệ số kx=" Round(kx, 3) " ky=" Round(ky, 3) " (RefW/RefH=" RefW "x" RefH ", SlotScale=" SlotScale ", GameResW=" GameResW ")  tỉ lệ client " Round(cw / Max(1, ch), 3) "  nằm trên màn " m "  DPI màn đó=" MonDpi(wx + ww // 2, wy + wh // 2) "  trạng thái=" WinGetMinMax(h) "  PID=" WinGetPID(h))
+        DLog("ENV: tâm client (" Round(cx + cw / 2) "," Round(cy + ch / 2) ")  ô quickslot đầu tiên cách mép phải " QS_X0 " px, mép dưới " QS_Y1 "/" QS_Y2 " px (khi kx=ky=1)")
     } catch as e {
         DLog("ENV: lỗi khi thu thập: " e.Message)
     }
@@ -382,7 +418,9 @@ PxBench(label) {
             gx := cx + cw // 2, gy := cy + ch // 2
         }
         t1 := 0, m1 := 0, t2 := 0, m2 := 0, t3 := 0, m3 := 0, t4 := 0, m4 := 0
-        loop 10 {
+        ; đo định kỳ thì lấy ít mẫu: mỗi mẫu PixelGetColor có thể mất 30ms, đo nhiều sẽ chặn vòng chính ~0,5-1 giây
+        nPx := label = "định kỳ" ? 3 : 10
+        loop nPx {
             t := PerfNow()
             PixelGetColor(x, y)
             d := PerfNow() - t, t1 += d, m1 := Max(m1, d)
@@ -400,14 +438,14 @@ PxBench(label) {
         }
         tq := 0, mq := 0, qn := 0
         if h && UseBatch && !QsOff {
-            loop 5 {
+            loop (label = "định kỳ" ? 2 : 5) {
                 t := PerfNow()
-                if QsCapture(cx, cy, cw, ch, Scale(cw), true)
+                if QsCapture(cx, cy, cw, ch, ScaleX(cw, ch), ScaleY(cw, ch), true)
                     qn += 1
                 d := PerfNow() - t, tq += d, mq := Max(mq, d)
             }
         }
-        DLog("BENCH " label ": chụp gộp dải quickslot " (qn ? "tb=" Round(tq / 5, 1) "ms max=" Round(mq, 1) "ms" : "không chạy") "  | đọc 1 điểm ở góc màn hình tb=" Round(t1 / 10, 1) "ms max=" Round(m1, 1) "  | giữa game tb=" Round(t2 / 10, 1) "ms max=" Round(m2, 1) "  | WinGetClientPos tb=" Round(t3 / 10, 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / 10, 2) "ms max=" Round(m4, 1))
+        DLog("BENCH " label ": chụp gộp dải quickslot " (qn ? "tb=" Round(tq / qn, 1) "ms max=" Round(mq, 1) "ms" : "không chạy") "  | đọc 1 điểm ở góc màn hình tb=" Round(t1 / nPx, 1) "ms max=" Round(m1, 1) "  | giữa game tb=" Round(t2 / nPx, 1) "ms max=" Round(m2, 1) "  | WinGetClientPos tb=" Round(t3 / nPx, 1) "ms max=" Round(m3, 1) "  | WinActive tb=" Round(t4 / nPx, 2) "ms max=" Round(m4, 1))
     }
 }
 
@@ -478,7 +516,7 @@ PerfReport() {
         DLog("ENV đổi: [" PerfSig "] -> [" sig "]")
         PerfSig := sig
         EnvDump()
-    } else if Mod(PerfReports, 5) = 0 {
+    } else if Mod(PerfReports, 10) = 0 {
         PxBench("định kỳ")
     }
 }
@@ -489,19 +527,19 @@ BuffSampleDump() {
     if !h
         return "không có cửa sổ game"
     WinGetClientPos &cx, &cy, &cw, &ch, h
-    k := Scale(cw)
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
     mx := cx + cw / 2
     my := cy + ch / 2
-    out := "client " cw "x" ch " k=" Round(k, 3) " tâm (" Round(mx) "," Round(my) ")  loại1 [cần ~40,140,170]: "
+    out := "client " cw "x" ch " kx=" Round(kx, 3) " ky=" Round(ky, 3) " tâm (" Round(mx) "," Round(my) ")  loại1 [cần ~40,140,170]: "
     try {
         for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-            x := Round(mx + p[1] * k), y := Round(my + p[2] * k)
+            x := Round(mx + p[1] * kx), y := Round(my + p[2] * ky)
             c := PxGet(x, y)
             out .= "(" x "," y ")=" ((c >> 16) & 0xFF) "," ((c >> 8) & 0xFF) "," (c & 0xFF) "  "
         }
         out .= " loại2 [cần ~44,165,186]: "
         for p in [[-140, -45], [140, -45]] {
-            x := Round(mx + p[1] * k), y := Round(my + p[2] * k)
+            x := Round(mx + p[1] * kx), y := Round(my + p[2] * ky)
             c := PxGet(x, y)
             out .= "(" x "," y ")=" ((c >> 16) & 0xFF) "," ((c >> 8) & 0xFF) "," (c & 0xFF) "  "
         }
@@ -522,8 +560,45 @@ ReadyHoldMs := 0
 ; Điểm lấy mẫu trên dải xám ở mép dưới icon: [lệch ngang, lệch dọc] so với tâm ô
 BandPts := [[-9, 13], [-2, 13], [4, 13]]
 
-; Độ phóng giữa độ phân giải game và vùng cửa sổ
-Scale(cw) => GameResW > 0 ? cw / GameResW : 1
+; ===== Hệ số phóng =====
+; Mọi số px trong script/ini (QS_*, BandPts, điểm dò bảng buff, BtnDX/DY...) được đo
+; tại vùng game RefW x RefH. Khi cửa sổ game to/nhỏ hơn thì quy đổi lại theo trục.
+EnsureRef(cw, ch) {
+    global RefW, RefH
+    if RefW > 0 {
+        if RefH <= 0 && ch > 0
+            RefH := ch
+        return
+    }
+    if cw > 0 {
+        RefW := cw
+        RefH := ch > 0 ? ch : Round(cw * 9 / 16)
+        DLog("ENV: chưa có RefW -> tự lấy vùng game hiện tại " RefW "x" RefH " (hệ số phóng = 1)")
+    }
+}
+ScaleX(cw, ch := 0) {
+    global RefW, SlotScale
+    EnsureRef(cw, ch)
+    return SlotScale = "native" ? 1 : (RefW > 0 ? cw / RefW : 1)
+}
+ScaleY(cw, ch) {
+    global RefH, SlotScale
+    EnsureRef(cw, ch)
+    if SlotScale = "native"
+        return 1
+    if SlotScale = "stretch"
+        return RefH > 0 ? ch / RefH : ScaleX(cw, ch)
+    return ScaleX(cw, ch)
+}
+; Nhiều hằng số trong script là "tỉ lệ của CHIỀU RỘNG" (LoginRY, PlayRY, DotDY...).
+; YRatio() đổi chúng sang pixel; YFactor() bù để mode uniform giữ đúng hành vi cũ.
+YFactor(cw, ch) {
+    global RefW
+    EnsureRef(cw, ch)
+    return cw > 0 ? RefW * ScaleY(cw, ch) / cw : 1
+}
+YPx(refPx, cw, ch) => refPx * ScaleY(cw, ch)
+YRatio(ry, cw, ch) => ry * cw * YFactor(cw, ch)
 
 ; Đọc danh sách skill từ settings.ini
 Skills := []
@@ -794,7 +869,7 @@ ShowSettings(*) {
     g := Gui("+AlwaysOnTop", "Maple Auto v1 - Cài đặt")
     g.SetFont("s9", "Segoe UI")
     g.AddText("w560", "Chỉnh xong bấm LƯU: script sẽ tự khởi động lại với thiết lập mới. Chi tiết xem HUONG_DAN.txt.")
-    gb1 := g.AddGroupBox("w560 h584 Section", "Chung")
+    gb1 := g.AddGroupBox("w560 h656 Section", "Chung")
     gb1.GetPos(&gx, &gy)            ; bố cục 2 cột (vừa màn hình 24 inch): cột trái = Chung, cột phải = Skill + Đăng nhập lại
     rows := [
         ["General", "ToggleKey", "Phím bắt đầu / tạm dừng / tiếp tục:"],
@@ -806,6 +881,8 @@ ShowSettings(*) {
         ["General", "RandMax", "Random sau hồi chiêu - tối đa (ms):"],
         ["General", "RepMax", "Skill 'lặp': ấn lại tối đa sau (ms):"],
         ["Detect", "GameResW", "Độ rộng độ phân giải game (0 = không phóng):"],
+        ["Detect", "RefW", "Độ rộng vùng game lúc đo px tham chiếu (0 = tự):"],
+        ["Detect", "RefH", "Chiều cao vùng game lúc đo px tham chiếu (0 = tự):"],
     ]
     y := 20
     for r in rows {
@@ -813,6 +890,9 @@ ShowSettings(*) {
         GuiCtl[r[2]] := g.AddEdit("x+4 yp-3 w200", Cfg(r[1], r[2]))
         y += 24
     }
+    g.AddText("xs+12 ys+" y " w300", "Cách phóng toạ độ theo cửa sổ game:")
+    GuiCtl["SlotScale"] := g.AddDropDownList("x+4 yp-3 w200 Choose" (SlotScale = "stretch" ? 2 : SlotScale = "native" ? 3 : 1), ["uniform (đều theo chiều rộng - cũ)", "stretch (X theo rộng, Y theo cao)", "native (giữ nguyên px, UI không phóng)"])
+    y += 24
     g.AddText("xs+12 ys+" y " w300", "Cách dùng skill chính:")
     GuiCtl["MainMode"] := g.AddDropDownList("x+4 yp-3 w200 Choose" (MainMode = "tap" ? 2 : 1), ["Ấn giữ", "Ấn nhả (ấn rồi nhả liên tục)"])
     y += 24
@@ -892,7 +972,7 @@ ShowSettings(*) {
     g.AddButton("xs+12 ys+104 w300", "Nhận diện màn hình (khoanh vùng bằng kéo thả)...").OnEvent("Click", (*) => ShowZoneGui())
     g.AddButton("x+8 yp w224", "Chạy thử quy trình đăng nhập lại").OnEvent("Click", TestRelogin)
     g.AddText("xs+12 ys+138 w536 cGray", "F9 = chạy thử quy trình (mở sẵn launcher hoặc màn hình chọn kênh). Log từng bước: debug_v1.log.")
-    g.AddButton("x" gx " y" (gy + Max(584, MaxSkillRows * 24 + 78 + 16 + 172) + 14) " w100 Default", "LƯU").OnEvent("Click", SaveSettings)
+    g.AddButton("x" gx " y" (gy + Max(656, MaxSkillRows * 24 + 78 + 16 + 172) + 14) " w100 Default", "LƯU").OnEvent("Click", SaveSettings)
     g.AddButton("x+8 w130", "Màu chuẩn ô...").OnEvent("Click", (*) => ShowColorGui())
     g.AddButton("x+8 w130", "Mở HƯỚNG DẪN").OnEvent("Click", (*) => OpenGuide())
     g.AddButton("x+8 w100", "Đóng").OnEvent("Click", (*) => g.Hide())
@@ -927,7 +1007,7 @@ OpenGuide() {
 
 SaveSettings(*) {
     ; kiểm tra số
-    for k in ["RandMin", "RandMax", "RepMax", "GameResW", "MainTapMs", "FocusSec"] {
+    for k in ["RandMin", "RandMax", "RepMax", "GameResW", "RefW", "RefH", "MainTapMs", "FocusSec"] {
         if !IsInteger(Trim(GuiCtl[k].Value)) || Integer(Trim(GuiCtl[k].Value)) < 0 {
             MsgBox "Ô '" k "' phải là số nguyên không âm.", "Maple Auto", "Icon!"
             return
@@ -998,6 +1078,9 @@ SaveSettings(*) {
     for k in ["ToggleKey", "MainKey", "MainTapMs", "GameExe", "GameClass", "RandMin", "RandMax", "RepMax"]
         IniWrite Trim(GuiCtl[k].Value), IniFile, "General", k
     IniWrite Trim(GuiCtl["GameResW"].Value), IniFile, "Detect", "GameResW"
+    IniWrite Trim(GuiCtl["RefW"].Value), IniFile, "Detect", "RefW"
+    IniWrite Trim(GuiCtl["RefH"].Value), IniFile, "Detect", "RefH"
+    IniWrite (GuiCtl["SlotScale"].Value = 2 ? "stretch" : GuiCtl["SlotScale"].Value = 3 ? "native" : "uniform"), IniFile, "Detect", "SlotScale"
     IniWrite (GuiCtl["MainMode"].Value = 2 ? "tap" : "hold"), IniFile, "General", "MainMode"
     IniWrite GuiCtl["UseSlotCheck"].Value, IniFile, "Detect", "UseSlotCheck"
     IniWrite Trim(GuiCtl["FocusSec"].Value), IniFile, "General", "FocusSec"
@@ -1048,7 +1131,7 @@ LogErr(e, mode) {
     global LastErr
     LastErr := e.Message " @dòng " e.Line " (" e.What ")"
     DLog("LỖI " LastErr)
-    try FileAppend(FormatTime(, "HH:mm:ss") "  " LastErr "`n", A_ScriptDir "\error_v1.log", "UTF-8")
+    try FileAppend(TsStr() "  " LastErr "`n", A_ScriptDir "\error_v1.log", "UTF-8")
     ToolTip "LỖI SCRIPT: " LastErr, 20, 20, 3
     SetTimer () => ToolTip(, , , 3), -8000
     return -1
@@ -1197,14 +1280,14 @@ ReleaseMain() {
 ; Chụp lỗi 3 lần liên tiếp thì tự tắt và quay về đọc từng điểm. Tắt hẳn bằng BatchCapture=0 trong settings_v1.ini [Detect].
 QsBuf := ""
 QsX := 0, QsY := 0, QsW := 0, QsH := 0
-QsCx := 0, QsCy := 0, QsCw := 0
+QsCx := 0, QsCy := 0, QsCw := 0, QsCh := 0
 QsAt := 0, QsOk := false, QsFails := 0, QsOff := false, QsLogged := 0, QsLastSlow := 0
 
-QsCapture(cx, cy, cw, ch, k, force := false) {
-    global QsBuf, QsX, QsY, QsW, QsH, QsCx, QsCy, QsCw, QsAt, QsOk, QsFails, QsOff, QsLogged, QsLastSlow
+QsCapture(cx, cy, cw, ch, kx, ky, force := false) {
+    global QsBuf, QsX, QsY, QsW, QsH, QsCx, QsCy, QsCw, QsCh, QsAt, QsOk, QsFails, QsOff, QsLogged, QsLastSlow
     if !UseBatch || QsOff
         return false
-    if !force && QsOk && A_TickCount - QsAt <= 80 && QsCx = cx && QsCy = cy && QsCw = cw
+    if !force && QsOk && A_TickCount - QsAt <= 80 && QsCx = cx && QsCy = cy && QsCw = cw && QsCh = ch
         return true
     maxCol := -1
     for s in Skills {
@@ -1218,11 +1301,11 @@ QsCapture(cx, cy, cw, ch, k, force := false) {
         minPX := Min(minPX, p[1]), maxPX := Max(maxPX, p[1])
         minPY := Min(minPY, p[2]), maxPY := Max(maxPY, p[2])
     }
-    xl := cx + cw - QS_X0 * k
-    x := Floor(xl + minPX * k) - 3
-    xe := Ceil(xl + QS_DX * k * maxCol + maxPX * k) + 3
-    y := Floor(cy + ch - Max(QS_Y1, QS_Y2) * k + minPY * k) - 3
-    ye := Ceil(cy + ch - Min(QS_Y1, QS_Y2) * k + maxPY * k) + 3
+    xl := cx + cw - QS_X0 * kx
+    x := Floor(xl + minPX * kx) - 3
+    xe := Ceil(xl + QS_DX * kx * maxCol + maxPX * kx) + 3
+    y := Floor(cy + ch - Max(QS_Y1, QS_Y2) * ky + minPY * ky) - 3
+    ye := Ceil(cy + ch - Min(QS_Y1, QS_Y2) * ky + maxPY * ky) + 3
     w := xe - x + 1
     h := ye - y + 1
     if w < 1 || h < 1 || w > 4000 || h > 1000
@@ -1260,7 +1343,7 @@ QsCapture(cx, cy, cw, ch, k, force := false) {
         }
         if ok {
             QsX := x, QsY := y, QsW := w, QsH := h
-            QsCx := cx, QsCy := cy, QsCw := cw
+            QsCx := cx, QsCy := cy, QsCw := cw, QsCh := ch
             QsAt := A_TickCount
             QsOk := true
             QsFails := 0
@@ -1305,14 +1388,14 @@ SlotSample(s) {
     if !GameHwnd()
         return ""
     WinGetClientPos &cx, &cy, &cw, &ch, GameHwnd()
-    k := Scale(cw)
-    x0 := cx + cw - QS_X0 * k + QS_DX * k * s["slot"][1]
-    y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * k
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
+    x0 := cx + cw - QS_X0 * kx + QS_DX * kx * s["slot"][1]
+    y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * ky
     out := []
     try {
-        QsCapture(cx, cy, cw, ch, k)
+        QsCapture(cx, cy, cw, ch, kx, ky)
         for p in BandPts {
-            c := QsPix(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
+            c := QsPix(Round(x0 + p[1] * kx), Round(y0 + p[2] * ky))
             out.Push([(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF])
         }
     } catch {
@@ -1369,7 +1452,7 @@ SlotState(s) {
 ; F2: hiện độ lệch màu của từng ô trong 8 giây
 DebugSlots() {
     WinGetClientPos , , &cw, &ch, GameHwnd()
-    txt := "Vùng game: " cw "x" ch "  hệ số phóng: " Round(Scale(cw), 3) "  (sẵn sàng nếu lệch <= " ReadyDist ")`n"
+    txt := "Vùng game: " cw "x" ch "  hệ số phóng: kx=" Round(ScaleX(cw, ch), 3) " ky=" Round(ScaleY(cw, ch), 3) "  (sẵn sàng nếu lệch <= " ReadyDist ")`n"
     for s in Skills {
         if !s.Has("slot")
             continue
@@ -1738,13 +1821,13 @@ UpdateHud() {
 ; Nháy trắng lúc hồi chiêu xong: cả 2 điểm trên dải mép dưới ô đều gần như trắng
 SlotIsWhite(s) {
     WinGetClientPos &cx, &cy, &cw, &ch, GameHwnd()
-    k := Scale(cw)
-    x0 := cx + cw - QS_X0 * k + QS_DX * k * s["slot"][1]
-    y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * k
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
+    x0 := cx + cw - QS_X0 * kx + QS_DX * kx * s["slot"][1]
+    y0 := cy + ch - (s["slot"][2] = 1 ? QS_Y1 : QS_Y2) * ky
     try {
-        QsCapture(cx, cy, cw, ch, k)
+        QsCapture(cx, cy, cw, ch, kx, ky)
         for p in [[-9, 13], [4, 13]] {
-            c := QsPix(Round(x0 + p[1] * k), Round(y0 + p[2] * k))
+            c := QsPix(Round(x0 + p[1] * kx), Round(y0 + p[2] * ky))
             r := (c >> 16) & 0xFF
             g := (c >> 8) & 0xFF
             b := c & 0xFF
@@ -1928,17 +2011,17 @@ GrabRect(x, y, w, h, &buf) {
     return ok
 }
 
-; mx,my = tâm vùng client game; k = hệ số phóng. Ảnh còn mới <= 40ms thì dùng lại (sau khi ấn phím luôn phải thấy ảnh mới).
-BdCapture(mx, my, k) {
+; mx,my = tâm vùng client game; kx,ky = hệ số phóng theo trục. Ảnh còn mới <= 40ms thì dùng lại (sau khi ấn phím luôn phải thấy ảnh mới).
+BdCapture(mx, my, kx, ky) {
     global BdBuf, BdX, BdY, BdW, BdH, BdMx, BdMy, BdAt, BdOk, BdFails, BdOff, BdLogged
     if !UseBatch || BdOff
         return false
     if BdOk && A_TickCount - BdAt <= 40 && BdMx = mx && BdMy = my
         return true
-    x := Floor(mx - 171 * k) - 3
-    xe := Ceil(mx + 171 * k) + 3
-    y := Floor(my - 60 * k) - 3
-    ye := Ceil(my + 25 * k) + 3
+    x := Floor(mx - 171 * kx) - 3
+    xe := Ceil(mx + 171 * kx) + 3
+    y := Floor(my - 60 * ky) - 3
+    ye := Ceil(my + 25 * ky) + 3
     w := xe - x + 1
     h := ye - y + 1
     if w < 1 || h < 1 || w > 4000 || h > 1000
@@ -1996,15 +2079,15 @@ BuffDialogKindRaw() {
     if !hwnd
         return 0
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    k := Scale(cw)
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
     mx := cx + cw / 2
     my := cy + ch / 2
     try {
-        BdCapture(mx, my, k)
+        BdCapture(mx, my, kx, ky)
         ; loại 1: bảng lớn, nền xanh ngọc đậm ~ (37,135,168)
         n := 0
         for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-            c := BdRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
+            c := BdRGB(Round(mx + p[1] * kx), Round(my + p[2] * ky))
             if Abs(c[1] - 40) <= 24 && Abs(c[2] - 140) <= 34 && Abs(c[3] - 170) <= 34
                 n += 1
         }
@@ -2013,14 +2096,14 @@ BuffDialogKindRaw() {
         ; loại 2: bảng nhỏ, phần trên xanh ngọc sáng ~ (44,165,186), phần dưới xám nhạt ~ (236,236,237)
         n := 0
         for p in [[-140, -45], [140, -45], [-140, -20], [140, -20]] {
-            c := BdRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
+            c := BdRGB(Round(mx + p[1] * kx), Round(my + p[2] * ky))
             if Abs(c[1] - 44) <= 20 && Abs(c[2] - 165) <= 20 && Abs(c[3] - 186) <= 20
                 n += 1
         }
         if n >= 3 {
             g := 0
             for p in [[-140, 25], [140, 25]] {
-                c := BdRGB(Round(mx + p[1] * k), Round(my + p[2] * k))
+                c := BdRGB(Round(mx + p[1] * kx), Round(my + p[2] * ky))
                 if c[1] >= 215 && c[2] >= 215 && c[3] >= 215
                     g += 1
             }
@@ -2047,13 +2130,13 @@ BuffFindButton(&x, &y, &hits) {
     if !hwnd
         return false
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    k := Scale(cw)
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
     mx := cx + cw / 2
     my := cy + ch / 2
     teal := 0
     try {
         for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-            c := PxGet(Round(mx + p[1] * k), Round(my + p[2] * k))
+            c := PxGet(Round(mx + p[1] * kx), Round(my + p[2] * ky))
             r := (c >> 16) & 0xFF, g := (c >> 8) & 0xFF, b := c & 0xFF
             if Abs(r - 40) <= 24 && Abs(g - 140) <= 34 && Abs(b - 170) <= 34
                 teal += 1
@@ -2068,16 +2151,16 @@ BuffFindButton(&x, &y, &hits) {
     if !(manual && BuffAlwaysManual) {
         ; nút "Use Unapplied Buffs": viền/nền olive ~ (146,176,25); nằm lệch phải tâm khoảng 18px, rộng ~118px
         found := false
-        try found := PixelSearch(&fx, &fy, Round(mx - 30 * k), Round(my + 95 * k), Round(mx + 70 * k), Round(my + 240 * k), 0x92B019, 45)
+        try found := PixelSearch(&fx, &fy, Round(mx - 30 * kx), Round(my + 95 * ky), Round(mx + 70 * kx), Round(my + 240 * ky), 0x92B019, 45)
         if found {
-            x := Round(fx + 40 * k)
-            y := Round(fy + 12 * k)
+            x := Round(fx + 40 * kx)
+            y := Round(fy + 12 * ky)
             return true
         }
     }
     if manual {                         ; dùng vị trí người dùng đã chọn trong F5
-        x := Round(mx + Number(BtnDX) * k)
-        y := Round(my + Number(BtnDY) * k)
+        x := Round(mx + Number(BtnDX) * kx)
+        y := Round(my + Number(BtnDY) * ky)
         return true
     }
     return false
@@ -2091,9 +2174,9 @@ BuffButtonPos(&x, &y) {
     if !hwnd
         return false
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    k := Scale(cw)
-    x := Round(cx + cw / 2 + 18 * k)
-    y := Round(cy + ch / 2 + 173 * k)
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
+    x := Round(cx + cw / 2 + 18 * kx)
+    y := Round(cy + ch / 2 + 173 * ky)
     return true
 }
 
@@ -2138,9 +2221,11 @@ ClickAt(x, y, attempt := 1) {
         Sleep 200
         PostMessage 0x0202, 0, lp, , hwnd   ; WM_LBUTTONUP
     } else if attempt = 4 {                 ; mouse_event toạ độ tuyệt đối gọi thẳng API
-        ax := Round(x * 65535 / (A_ScreenWidth - 1))
-        ay := Round(y * 65535 / (A_ScreenHeight - 1))
-        DllCall("mouse_event", "UInt", 0x8001, "UInt", ax, "UInt", ay, "UInt", 0, "UPtr", 0)
+        ; phải quy theo VÙNG ẢO của mọi màn hình + cờ VIRTUALDESK, nếu không sẽ bấm nhầm màn chính
+        vs := VirtualScreen()
+        ax := Round((x - vs[1]) * 65535 / Max(1, vs[3] - 1))
+        ay := Round((y - vs[2]) * 65535 / Max(1, vs[4] - 1))
+        DllCall("mouse_event", "UInt", 0xC001, "UInt", ax, "UInt", ay, "UInt", 0, "UPtr", 0)     ; MOVE|ABSOLUTE|VIRTUALDESK
         Sleep 250
         DllCall("mouse_event", "UInt", 0x8002, "UInt", ax, "UInt", ay, "UInt", 0, "UPtr", 0)     ; LEFTDOWN
         Sleep 200
@@ -2169,9 +2254,9 @@ CancelButtonPos(&x, &y) {
     if !hwnd
         return false
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    k := Scale(cw)
-    x := Round(cx + cw / 2 + 44 * k)
-    y := Round(cy + ch / 2 + 37 * k)
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
+    x := Round(cx + cw / 2 + 44 * kx)
+    y := Round(cy + ch / 2 + 37 * ky)
     return true
 }
 
@@ -2300,10 +2385,10 @@ CaptureBtnPos(*) {
         Sleep 900                       ; chờ bảng đóng
         closed := !BuffDialogOpen()
         WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-        k := Scale(cw)
+        kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
         inside := px >= cx && py >= cy && px <= cx + cw && py <= cy + ch
         if closed && inside {
-            NewBtn := [Round((px - (cx + cw / 2)) / k, 1), Round((py - (cy + ch / 2)) / k, 1)]
+            NewBtn := [Round((px - (cx + cw / 2)) / kx, 1), Round((py - (cy + ch / 2)) / ky, 1)]
             result := "OK"
         } else if !inside {
             result := "Chỗ bạn bấm nằm ngoài cửa sổ game, hãy thử lại."
@@ -2334,14 +2419,14 @@ DebugBuff() {
         return
     }
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    k := Scale(cw)
+    kx := ScaleX(cw, ch), ky := ScaleY(cw, ch)
     mx := cx + cw / 2
     my := cy + ch / 2
     found := BuffFindButton(&bx, &by, &hits)
-    txt := "Vùng game " cw "x" ch "  hệ số " Round(k, 3) "`nLoại bảng: " BuffDialogKind() " (1 = Buff Sequence, 2 = EXP Coupon, 0 = không có)`nNút Use Unapplied Buffs: " (found ? "thấy ở (" bx "," by ")" : "không thấy") "`n"
+    txt := "Vùng game " cw "x" ch "  hệ số kx=" Round(kx, 3) " ky=" Round(ky, 3) "`nLoại bảng: " BuffDialogKind() " (1 = Buff Sequence, 2 = EXP Coupon, 0 = không có)`nNút Use Unapplied Buffs: " (found ? "thấy ở (" bx "," by ")" : "không thấy") "`n"
     txt .= "Điểm nền (cần ~ 40,140,170; đạt " hits "/4): "
     for p in [[-171, -60], [171, -60], [-171, -10], [171, -10]] {
-        c := PxGet(Round(mx + p[1] * k), Round(my + p[2] * k))
+        c := PxGet(Round(mx + p[1] * kx), Round(my + p[2] * ky))
         txt .= ((c >> 16) & 0xFF) "," ((c >> 8) & 0xFF) "," (c & 0xFF) "  "
     }
     ToolTip txt, cx + 10, cy + 10, 5
@@ -2639,11 +2724,12 @@ ZoneHwnd(id) {
     return SubStr(id, 1, 1) = "L" ? LauncherHwnd() : GameHwnd()
 }
 
-; Tỉ lệ -> pixel màn hình. Launcher: x theo rộng, y theo cao; Game: cả x và y theo CHIỀU RỘNG (như các điểm mặc định)
+; Tỉ lệ -> pixel màn hình. Launcher: x theo rộng, y theo cao; Game: y lưu theo bội số CHIỀU RỘNG
+; (như các điểm mặc định) nên nhân thêm YFactor để đúng khi SlotScale khác uniform.
 ZoneToPx(id, hwnd, &x1, &y1, &x2, &y2) {
     z := Zones[id]
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    sy := SubStr(id, 1, 1) = "L" ? ch : cw
+    sy := SubStr(id, 1, 1) = "L" ? ch : cw * YFactor(cw, ch)
     x1 := Round(cx + z["l"] * cw)
     x2 := Round(cx + z["r"] * cw)
     y1 := Round(cy + z["t"] * sy)
@@ -2725,7 +2811,8 @@ DragSelect(prompt) {
     KeyWait "LButton", "T2"
     ov := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale")
     ov.BackColor := "000000"
-    ov.Show("x0 y0 w" A_ScreenWidth " h" A_ScreenHeight " NoActivate")
+    vs := VirtualScreen()
+    ov.Show("x" vs[1] " y" vs[2] " w" vs[3] " h" vs[4] " NoActivate")
     WinSetTransparent(70, ov.Hwnd)
     sel := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale")
     sel.BackColor := "FF2020"
@@ -2805,7 +2892,7 @@ ZoneLearnInner(id) {
         return
     isL := SubStr(id, 1, 1) = "L"
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
-    sy := isL ? ch : cw
+    sy := isL ? ch : cw * YFactor(cw, ch)
     baseId := id
     if def[4] = "color" {
         baseId := "L_DOT_IDLE"
@@ -3004,11 +3091,15 @@ ClientW(hwnd) {
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
     return cw
 }
+ClientH(hwnd) {
+    WinGetClientPos , , , &ch, hwnd
+    return ch
+}
 
 GamePt(hwnd, rx, ry, &x, &y) {
     WinGetClientPos &cx, &cy, &cw, &ch, hwnd
     x := Round(cx + rx * cw)
-    y := Round(cy + ry * cw)
+    y := Round(cy + YRatio(ry, cw, ch))
 }
 
 GameCol(hwnd, rx, ry) {
@@ -3189,7 +3280,7 @@ ChooseChannelAndLogin(gh, n) {
     } else {
         GamePt(gh, Ch1RX + col * ChDX, Ch1RY + row * ChDY, &x, &y)
         cellW := Round(ChDX * ClientW(gh))
-        cellH := Round(ChDY * ClientW(gh))
+        cellH := Round(ChDY * ClientW(gh) * YFactor(ClientW(gh), ClientH(gh)))
     }
     sel := false
     loop 3 {
@@ -3344,7 +3435,8 @@ FocusWin(hwnd, label) {
     return ok
 }
 
-; Đặt vị trí cố định: game = giữa màn hình, launcher = góc trên-trái. Chỉ di chuyển khi lệch > 3px (không đổi kích thước)
+; Đặt vị trí cố định: game = giữa vùng làm việc của màn hình đang chứa nó, launcher = góc trên-trái màn hình chính.
+; Chỉ di chuyển khi lệch > 3px (không đổi kích thước)
 PlaceWin(hwnd, label) {
     static lastLog := 0
     if !PlaceWindows
@@ -3353,19 +3445,31 @@ PlaceWin(hwnd, label) {
         if WinGetMinMax(hwnd) != 0
             return
         WinGetPos &x, &y, &w, &h, hwnd
+        mon := GameMonitor(hwnd)
+        if !mon
+            mon := MonitorGetPrimary()
         if label = "launcher" {
             WinGetClientPos &cx, &cy, , , hwnd
-            tx := x - cx, ty := y - cy              ; khung client chạm góc (0,0)
+            ; góc trên-trái của vùng làm việc màn hình CHÍNH (0,0 chỉ đúng khi màn chính ở gốc toạ độ)
+            if MonitorGetWorkArea(MonitorGetPrimary(), &wl, &wt, , )
+                tx := wl + (x - cx), ty := wt + (y - cy)
+            else
+                tx := x - cx, ty := y - cy
+            where := "góc trên-trái màn hình chính"
+        } else if mon && MonitorGetWorkArea(mon, &wl, &wt, &wr, &wb) {
+            ; đặt giữa vùng làm việc của MÀN HÌNH CHỨA cửa sổ game (không phải luôn màn chính)
+            tx := wl + Max(0, (wr - wl - w) // 2), ty := wt + Max(0, (wb - wt - h) // 2)
+            where := "màn " mon "/" MonitorGetCount() " vùng làm việc " wl "," wt " - " wr "," wb
         } else {
-            tx := Max(0, (A_ScreenWidth - w) // 2)
-            ty := Max(0, (A_ScreenHeight - h) // 2)
+            tx := Max(0, (A_ScreenWidth - w) // 2), ty := Max(0, (A_ScreenHeight - h) // 2)
+            where := "màn hình chính " A_ScreenWidth "x" A_ScreenHeight
         }
         if Abs(x - tx) > 3 || Abs(y - ty) > 3 {
             WinMove tx, ty, , , hwnd
             Sleep 200
             if A_TickCount - lastLog > 3000 {
                 lastLog := A_TickCount
-                RLog("Đặt vị trí " label ": (" x "," y ") -> (" tx "," ty "), cỡ " w "x" h ", màn hình " A_ScreenWidth "x" A_ScreenHeight)
+                RLog("Đặt vị trí " label ": (" x "," y ") -> (" tx "," ty "), cỡ " w "x" h ", " where)
             }
         }
     } catch as e {

@@ -250,19 +250,28 @@ Mất game > Chờ LostSec giây > Mở launcher (nếu chưa có)
 | 3 | Đóng cả game + launcher, đăng nhập lại từ đầu |
 | 4 | Báo thất bại, dừng auto |
 
-### Nhận diện ô Quickslot
+### Nhận diện ô Quickslot & quy đổi theo độ phân giải
 
 ```ini
 [Detect]
 UseSlotCheck=1      ; 1 = đọc màu ô; 0 = chỉ dùng bộ đếm
-GameResW=1366       ; độ rộng game (0 = không phóng)
-QS_X0=544           ; khoảng cách từ mép phải game đến cột đầu tiên (px)
+GameResW=1366       ; độ rộng game lúc đo px (0 = không phóng) - giữ cho tương thích ini cũ
+RefW=1366           ; vùng game (rộng) lúc đo các số px bên dưới; 0 = theo GameResW, rồi tự lấy vùng đang mở
+RefH=768            ; vùng game (cao) lúc đo; 0 = 9/16 của RefW, rồi tự lấy vùng đang mở
+SlotScale=uniform   ; uniform = phóng đều theo chiều rộng (như bản cũ) | stretch = X theo rộng, Y theo cao | native = giữ nguyên px
+QS_X0=544           ; khoảng cách từ mép phải game đến cột đầu tiên (px tại khung RefWxRefH)
 QS_DX=35            ; khoảng cách giữa 2 cột (px)
 QS_Y1=64            ; hàng trên cách mép dưới (px)
 QS_Y2=29            ; hàng dưới cách mép dưới (px)
 ReadyDist=45        ; ngưỡng lệch màu để coi là "sẵn sàng"
 BatchCapture=1      ; 1 = chụp gộp dải ô 1 lần (nhanh hơn nhiều trong Sandbox)
 ```
+
+Mọi số px trong ini (QS_*, BandPts, điểm dò bảng buff, BtnDX/BtnDY, vùng đã khoanh) đều được
+hiểu là px tại khung `RefW x RefH`. Khi cửa sổ game to/nhỏ hơn, script tự nhân hệ số theo trục:
+`uniform` (mặc định - y như bản cũ), `stretch` (khung bị kéo dài/co chiều cao), `native`
+(game vẽ UI đúng cỡ px, không phóng). Dòng `ENV:` trong `debug_v1.log` ghi `kx`, `ky`, `RefW/RefH`,
+`SlotScale` để biết script đang quy đổi thế nào.
 
 ---
 
@@ -415,7 +424,14 @@ Xbox Game Bar không có trong Sandbox. Bấm **OK / ESC** để tắt, không �
 1. Kiểm tra phím skill đúng chưa trong F5
 2. Bấm **F2** để xem độ lệch màu ô (cần < ReadyDist = 45)
 3. Vào F5 > Màu chuẩn ô > lấy lại màu chuẩn khi skill **đang sẵn sàng**
-4. Kiểm tra `QS_X0`, `QS_DX`, `QS_Y1`, `QS_Y2` có đúng với độ phân giải game
+4. Kiểm tra `QS_X0`, `QS_DX`, `QS_Y1`, `QS_Y2` có đúng với khung đo `RefW x RefH` (mặc định = độ phân giải game lúc đo)
+
+### Đổi cửa sổ game / đổi máy khác độ phân giải thì ô quickslot đọc sai?
+1. Xem dòng `ENV:` đầu `debug_v1.log`: `RefW/RefH`, `SlotScale`, `kx`, `ky` phải khớp với lúc bạn đo px
+2. Nếu vùng game lúc đo là 1366x768 mà nay chơi 1920x1080 cùng tỉ lệ 16:9 → để `SlotScale=uniform`
+3. Nếu cửa sổ bị kéo cho cao/thấp khác tỉ lệ → đặt `SlotScale=stretch`
+4. Nếu game vẽ UI đúng cỡ px không phóng → đặt `SlotScale=native`
+5. Sau khi đổi, mở F5 > LƯU (script tự khởi động lại) rồi bấm **F2** xem lại độ lệch màu
 
 ### Tự đăng nhập lại không hoạt động?
 1. Bấm **F9** để chạy thử (xem log `debug_v1.log`, dòng `[ĐN]`)
