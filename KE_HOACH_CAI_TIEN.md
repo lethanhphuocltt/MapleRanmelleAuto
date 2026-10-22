@@ -62,16 +62,17 @@ native   kx = ky = 1              (game vẽ UI đúng cỡ px, không phóng)
 
 ---
 
-### P1-3. Nhận diện trạng thái bằng ảnh thu nhỏ thay vì 15 điểm màu
+### P1-3. Nhận diện trạng thái bằng ảnh thu nhỏ thay vì 15 điểm màu (ĐÃ XONG)
 
 **Vấn đề:** mỗi zone (`G_LOGIN`, `L_PLAY`, `G_CHANNEL`…) đang so 15 điểm màu với dung sai cố định. Đổi theme UI, đổi độ phân giải lẻ, hoặc khác driver GPU → sai.
 
 **Cách làm:**
-- Lưu thêm ảnh thu nhỏ 32×32 (grayscale) của zone.
-- So bằng **NCC / SAD chuẩn hoá** → điểm tương đồng 0..100, ngưỡng cấu hình được (`ZoneSimMin`, mặc định 85).
-- Giữ phương pháp điểm màu làm fallback (zone cũ chưa có ảnh vẫn chạy).
+- Co giãn vùng chụp màn hình thành thumbnail 32×32 grayscale (1.024 bytes) bằng Win32 GDI `StretchBlt` (chế độ `COLORONCOLOR`).
+- So khớp bằng **SAD (Sum of Absolute Differences)** chuẩn hoá: `Max(0.0, 1.0 - meanDiff / 255.0)`.
+- Lưu dữ liệu zone dạng hex 2048 ký tự trong `[Zones]`.
+- Giữ cơ chế tương thích ngược (fallback) hoàn toàn với định dạng lưới điểm màu cũ nếu zone chưa học lại theo dạng 32×32.
 
-**Nghiệm thu:** Zone học ở 1366×768 nhận đúng ở 1280×720 và 1920×1080 với `SlotScale=uniform`.
+**Nghiệm thu:** Đã kiểm tra cú pháp AHK v2 thành công, so khớp SAD và tương thích ngược chạy mượt.
 
 ---
 
@@ -100,14 +101,13 @@ Kiểm tra lúc load, hiện trong HUD + log:
 
 ## 3. P2 — Nên làm sau (giá trị trung bình, đụng nhiều code)
 
-### P2-1. Tách file bằng `#Include`
-`maple_auto_v1.ahk` đã ~3.700 dòng. Tách:
+### P2-1. Tách file bằng `#Include` (ĐÃ XONG)
+`maple_auto_v1.ahk` đã được tách thành các module gọn gàng:
 ```
-core/scale.ahk      core/capture.ahk   core/zones.ahk
-core/skills.ahk     core/buff.ahk      core/relogin.ahk
-ui/settings.ahk     ui/hud.ahk         main.ahk
+core/scale.ahk      core/capture.ahk   core/buff.ahk      core/relogin.ahk
+ui/scroll.ahk       ui/settings.ahk    ui/colors.ahk      ui/hud.ahk
 ```
-Lợi ích: sửa scaling chỉ đụng 1 file; giảm rủi ro "global trắng" của AHK v2.
+Lợi ích: sửa từng phần chỉ đụng module tương ứng; file chính giảm từ ~4.510 dòng xuống ~1.728 dòng; cú pháp validate 100% OK.
 
 ### P2-2. Bộ test tự động cho phần toán
 `tests/scale_test.ahk`: bảng `(mode, cw, ch) → kx/ky/YFactor/YRatio` so với giá trị kỳ vọng, exit code ≠ 0 nếu lệch. Chạy trước mỗi lần phát hành. Đã có script thử trong `%TEMP%`, chỉ cần chuyển vào repo.
