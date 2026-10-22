@@ -230,3 +230,31 @@ Một bản phát hành được coi là "tương thích" khi:
   - Cách sửa: thêm `TabPageShift(g)` — sau `g.Show()`, đo `GetWindowRect(trang)` so với `ClientToScreen(cửa sổ)` để lấy độ lệch thật, rồi `SetWindowPos` (NOSIZE|NOZORDER|NOACTIVATE) đẩy toàn bộ control của từng trang xuống đúng độ lệch (có đổi toạ độ màn hình -> client của trang bằng `ScreenToClient`). Log (debug): `GUI thẻ: trang N ctl bù 58px`.
   - Nhờ đẩy bằng độ lệch thật, nội dung thẻ dùng được gần hết chiều cao: tăng `AddTab3` `h560 -> h600`, cửa sổ `676 -> 716`, 4 nút đáy `y610 -> y650`. Thẻ Buff giữ nguyên 52px/dòng (7 dòng tới y=380, nút +/− y=478) — không phải nén. Thẻ Skill: 34 phím vẫn 2 cột x 17 dòng (đáy 463), dòng ghi chú dời `y440 -> y466` và rút còn 3 dòng để không đè dòng cuối (đáy 511 < 514).
   - Nghiệm thu bằng ảnh chụp + OCR cả 4 thẻ: thẻ Buff hiện `buff 1: phím ... q` + `buff 2: phím 6` (trước chỉ có dòng 2); thẻ Chung hiện dòng đầu `Phím bật đầu / tạm dừng / tiếp tục:`; thẻ Skill hiện checkbox `Đọc ô quickslot...` + 5 tiêu đề cột; thẻ Đăng nhập lại hiện khối hướng dẫn trên cùng. Không control nào bị cắt, không đè nút. `ahk /validate` = 0. Bản dựng: `20261022-build4`.
+---
+
+## 2026-10-22 - build5: tuỳ chọn tự học màu (BETA), thời gian ngừng ấn 1 phím, F2 tô màu, F5 bật/tắt
+
+**1. Nút bật/tắt tự học lại màu (BETA)**
+- Thêm `Detect > Relearn` (mặc định `0` = TẮT) + checkbox **Tự học lại màu ô (BETA)** ở đầu thẻ Skill; `StartupLog` ghi rõ BẬT/tắt.
+- Code: mọi nhánh học màu trong `ScanSlotsInner` (`diffSince` + `RelearnSlot`) và nhánh ấn thử lấy mẫu `cdSample` đều chặn bằng `RelearnOn`. Khi tắt, script không bao giờ tự đổi `slot_base_v1.ini`.
+
+**2. Tuỳ chỉnh thời gian ngừng ấn 1 phím**
+- Thêm `Detect > BlockMin` (mặc định `10`, cho 0-120) + ô nhập trong thẻ Skill; `SaveSettings` kiểm tra hợp lệ.
+- Thay toàn bộ hằng số `600000` cứng: `CheckVerify` (5 lần ✗ liên tiếp) và `ScanSlotsInner` (ô bị coi là hồi chiêu quá `RelearnMin`) dùng `BlockMs`; đặt `BlockMin=0` thì **không bao giờ** ngừng ấn mà chỉ ghi log cảnh báo.
+- Log đổi theo giá trị thật (không còn "10 phút" viết cứng); bỏ `Max(600000, RelearnMs*2)` - giờ đúng `BlockMin` phút.
+
+**3. F2 tô màu**
+- `DebugSlots` đổi từ `ToolTip` 1 khối chữ sang cửa sổ `Gui +AlwaysOnTop -Caption +ToolWindow` (tự đóng sau 10 giây, bấm F2 lần nữa để dựng lại): **xanh lá = SẴN SÀNG**, **đỏ = HỒI CHIÊU**, **xám = chưa lưu màu chuẩn** + dòng tổng kết số phím sẵn sàng/hồi chiêu.
+
+**4. Đổi nhãn + dọn nút**
+- Tiêu đề cột thẻ Skill: `Cooldown (s)` -> `Cooldown (giây)`, `Lặp` -> `Ấn lặp (bỏ hồi chiêu)`, `Không dừng V` -> `Không dừng main Skill` (font `s8`, 2 dòng, canh giữa theo ô tick).
+- Nút **Màu chuẩn ô (bảng lấy màu)...** chuyển từ hàng nút đáy vào góc phải đầu thẻ Skill; hàng đáy còn 3 nút: LƯU / Mở HƯỚNG DẪN / Đóng.
+- `F5` = bật/tắt bảng (`ToggleSettings`); `Esc` = đóng **không lưu** (`OnEvent("Escape", ...)`), chỉ LƯU/Enter mới ghi ini.
+
+**5. Sửa bố cục thẻ Skill sau khi thêm 2 ô số**
+- Dòng nhãn dài bị xuống dòng đè lên ô nhập: nới nhãn (`x20 w440`) và dời ô `BlockMin` sang `x466`.
+- Tiêu đề `Ấn lặp (bỏ hồi chiêu)` ở `s9` phải xuống 3 dòng -> đè dòng phím đầu; hạ font tiêu đề xuống `s8`, nới rộng 72px, dời `Không dừng main Skill` sang `x+212` là vừa 2 dòng.
+- Ghi chú đáy dời `y486 -> y512` vì 2 dòng phím phụ (phím ngoài danh sách) kết thúc ở `y501`.
+- Nghiệm thu tự động (không cần mắt): probe liệt kê mọi control của từng trang thẻ qua `GetWindowRect`, báo cặp control **chồng nhau** và control **bị cắt** trên/dưới trang -> cả 4 thẻ: 0 chồng, 0 cắt (Chung 33 / Skill 188 / Buff 24 / Đăng nhập 10 control). Ảnh chụp + OCR thẻ Skill xác nhận đủ 5 tiêu đề cột + 2 ô số + nút Màu chuẩn ô.
+
+**Kiểm thử:** `ahk /validate` = 0. F2 dựng bằng probe có stub (3 xanh / 1 đỏ / 1 xám) — đếm điểm ảnh: xanh 144, đỏ 207. Bản dựng: `20261022-build5`.

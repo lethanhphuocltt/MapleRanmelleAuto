@@ -33,7 +33,7 @@ try {
 IniFile := A_ScriptDir "\settings_" IniRead(A_ScriptDir "\settings_v1.ini", "General", "Profile", "v1") ".ini"
 SlotIni := A_ScriptDir "\slot_base_v1.ini"   ; màu "sẵn sàng" của từng ô (lưu bằng nút "Lấy màu chuẩn" trong F5)
 ; Nhãn bản dựng: hiện ở tiêu đề cửa sổ F5 và dòng đầu log để biết cửa sổ đang chạy mã mới hay bản cũ còn nằm trong bộ nhớ
-ScriptBuild := "20261022-build4"
+ScriptBuild := "20261022-build5"
 
 ; Giá trị mặc định: [mục, tên, mặc định]
 Defaults := [
@@ -109,6 +109,8 @@ Defaults := [
     ["Detect", "FlashIgnoreMs", "2000"],
     ["Detect", "CheckEveryMs", "1000"],
     ["Detect", "RelearnMin", "5"],          ; ô bị coi là "hồi chiêu" liên tục quá chừng này phút -> tạm ngừng ấn phím đó + cảnh báo (0 = tắt)
+    ["Detect", "Relearn", "0"],             ; 1 = bật tự học lại màu ô (BETA), 0 = tắt
+    ["Detect", "BlockMin", "10"],           ; ấn mãi không ra / ô đọc sai -> tạm ngừng ấn riêng phím đó chừng này phút (0 = không bao giờ ngừng)
 ]
 ; Skill: phím|cooldown(giây)|hàng quickslot (0=không có/không đọc, 1=hàng trên, 2=hàng dưới)|cột (từ 0)|lặp (1/0)|không dừng phím chính khi dùng (1/0)|bật (1/0)
 ; Thứ tự = thứ tự ưu tiên.
@@ -328,6 +330,12 @@ RelearnMin    := Number(Cfg("Detect", "RelearnMin"))
 if !IsNumber(RelearnMin) || RelearnMin < 0
     RelearnMin := 5
 RelearnMs     := Round(RelearnMin * 60000)
+RelearnOn     := Cfg("Detect", "Relearn") != "0"      ; tự học lại màu ô (BETA)
+BlockMin      := Number(Cfg("Detect", "BlockMin"))
+if !IsNumber(BlockMin) || BlockMin < 0
+    BlockMin := 10
+BlockMin      := Min(BlockMin, 120)
+BlockMs       := Round(BlockMin * 60000)
 ; Theo dõi khung hình game để xoá ảnh đã chụp khi cửa sổ đổi kích thước, và cảnh báo cấu hình sai
 LastCliW      := 0
 LastCliH      := 0
@@ -863,13 +871,13 @@ BuffSummary() {
 StartupLog() {
     global IniFile, MainKey, ToggleKey, TickMs, CheckEveryMs, FlashEveryMs, ReloginOn, DebugMax
     global RefW, RefH, SlotScale, GameResW, UseBatch, MaxRetry, RetryGapMs, SlowRetryMs, Skills, RelearnMin
-    global SkillLayoutRows, MaxSkillRows, ScriptBuild
+    global SkillLayoutRows, MaxSkillRows, ScriptBuild, RelearnOn, BlockMin
     try {
         sz := FileGetSize(A_ScriptFullPath)
         mt := FileGetTime(A_ScriptFullPath)
         DLog("=== PHIÊN: bản dựng " ScriptBuild " | script " A_ScriptFullPath " (" sz " byte, sửa " FormatTime(mt, "yyyy-MM-dd HH:mm:ss") ") ===")
         DLog("PHIÊN: settings " IniFile " | khung tham chiếu " RefText() " SlotScale=" SlotScale " GameResW=" GameResW " | " Skills.Length " skill (bật) | bảng skill " SkillLayoutRows "/" MaxSkillRows " dòng theo 2 hàng phím mặc định | phím chính=" StrUpper(MainKey) " bật/tắt=" ToggleKey " | " BuffSummary() " | log tối đa " DebugMax " dòng")
-        DLog("PHIÊN: nhịp loop=" TickMs "ms quét ô=" CheckEveryMs "ms nháy=" FlashEveryMs "ms | MaxRetry=" MaxRetry " RetryGap=" RetryGapMs "ms SlowRetry=" SlowRetryMs "ms | chụp gộp=" (UseBatch ? "bật" : "tắt") " | canh đăng nhập=" (ReloginOn ? "bật" : "tắt") " | tự học lại màu ô: " (RelearnMin > 0 ? "khi ô rời màu hồi chiêu (tạm ngừng ấn nếu > " RelearnMin " phút)" : "KHÔNG (tắt)"))
+        DLog("PHIÊN: nhịp loop=" TickMs "ms quét ô=" CheckEveryMs "ms nháy=" FlashEveryMs "ms | MaxRetry=" MaxRetry " RetryGap=" RetryGapMs "ms SlowRetry=" SlowRetryMs "ms | chụp gộp=" (UseBatch ? "bật" : "tắt") " | canh đăng nhập=" (ReloginOn ? "bật" : "tắt") " | tự học lại màu ô (BETA): " (RelearnOn ? "BẬT - ô bị coi là hồi chiêu quá " RelearnMin " phút thì tạm ngừng ấn + học lại màu khi ô rời màu hồi chiêu" : "tắt") " | tạm ngừng 1 phím khi ấn mãi không ra: " (BlockMs > 0 ? BlockMin " phút" : "KHÔNG"))
     } catch as e {
         DLog("PHIÊN: lỗi khi ghi thông tin khởi động: " e.Message)
     }
@@ -1170,6 +1178,15 @@ OnWheelScroll(wParam, lParam, msg, hwnd) {
 OnMessage(0x115, OnVScroll)
 OnMessage(0x20A, OnWheelScroll)
 
+; F5 = bật/tắt bảng cài đặt. Esc hoặc nút Đóng = đóng mà KHÔNG lưu.
+ToggleSettings(*) {
+    global SettingsGui
+    if IsObject(SettingsGui) && GuiVisible(SettingsGui)
+        SettingsGui.Hide()
+    else
+        ShowSettings()
+}
+
 ShowSettings(*) {
     global SettingsGui, GuiCtl, SettingsBusy, BuffEditN, ScriptBuild
     SettingsBusy := true        ; tạm dừng trước, rồi mới dựng/mở bảng cài đặt
@@ -1279,17 +1296,24 @@ ShowSettings(*) {
 
     ; --- Tab 2: Skill ---
     tab.UseTab(2)
-    GuiCtl["UseSlotCheck"] := g.AddCheckbox("x20 y8 w640", "Đọc ô quickslot để biết hồi chiêu xong (bỏ chọn = chỉ dùng bộ đếm thời gian)")
+    GuiCtl["UseSlotCheck"] := g.AddCheckbox("x20 y8 w430", "Đọc ô quickslot để biết hồi chiêu xong (bỏ = chỉ dùng bộ đếm)")
     GuiCtl["UseSlotCheck"].Value := UseSlotCheck ? 1 : 0
-    g.AddText("x20 y36 w440", "Ô bị coi là hồi chiêu quá lâu (phút) thì tạm ngừng ấn phím đó (0 = tắt):")
-    GuiCtl["RelearnMin"] := g.AddEdit("x476 y33 w60", Cfg("Detect", "RelearnMin"))
+    g.AddButton("x462 y4 w210", "Màu chuẩn ô (bảng lấy màu)...").OnEvent("Click", (*) => ShowColorGui())
+    GuiCtl["Relearn"] := g.AddCheckbox("x20 y30 w230", "Tự học lại màu ô (BETA)")
+    GuiCtl["Relearn"].Value := RelearnOn ? 1 : 0
+    g.AddText("x256 y33 w300", "Coi là hồi chiêu quá lâu (phút) thì ngừng ấn:")
+    GuiCtl["RelearnMin"] := g.AddEdit("x560 y30 w50", Cfg("Detect", "RelearnMin"))
+    g.AddText("x20 y54 w440", "Ấn mãi không ra thì ngừng ấn phím đó (phút, 0 = không ngừng):")
+    GuiCtl["BlockMin"] := g.AddEdit("x466 y51 w50", Cfg("Detect", "BlockMin"))
+    g.SetFont("s8", "Segoe UI")          ; tiêu đề cột nhỏ hơn để 2 dòng chữ dài vẫn vừa ô hẹp
     for cx in [20, 366] {
-        g.AddText("x" cx " y64 w30", "Bật")
-        g.AddText("x" (cx + 34) " y64 w50", "Phím")
-        g.AddText("x" (cx + 88) " y64 w74", "Cooldown (s)")
-        g.AddText("x" (cx + 162) " y64 w34", "Lặp")
-        g.AddText("x" (cx + 200) " y64 w110", "Không dừng V")
+        g.AddText("x" cx " y80 w26", "Bật")
+        g.AddText("x" (cx + 32) " y80 w46", "Phím")
+        g.AddText("x" (cx + 82) " y76 w50", "Cooldown`n(giây)")
+        g.AddText("x" (cx + 136) " y76 w72", "Ấn lặp`n(bỏ hồi chiêu)")
+        g.AddText("x" (cx + 212) " y76 w104", "Không dừng`nmain Skill")
     }
+    g.SetFont("s9", "Segoe UI")
 
     GuiCtl["rows"] := []
     extra := 0
@@ -1306,29 +1330,29 @@ ShowSettings(*) {
             f[2] := "60"
         ; hàng 1 của bàn phím -> cột trái, hàng 2 -> cột phải, phím ngoài danh sách -> cuối cột phải
         cx := (!fixed || fx[2] = 2) ? 366 : 20
-        cy := 88 + (fixed ? fx[3] : 16 + extra) * 22
+        cy := 104 + (fixed ? fx[3] : 16 + extra) * 22
         if !fixed
             extra += 1
-        c0 := g.AddCheckbox("x" cx " y" (cy + 3) " w30", "")
+        c0 := g.AddCheckbox("x" cx " y" (cy + 3) " w26", "")
         c0.Value := (Trim(f[7]) = "0" || Trim(f[1]) = "") ? 0 : 1      ; không ghi/trống = bật; dòng trống = tắt
-        e1 := fixed ? g.AddEdit("x" (cx + 34) " y" cy " w50 ReadOnly BackgroundEEEEEE", KeyLabel(f[1])) : g.AddEdit("x" (cx + 34) " y" cy " w50", f[1])
-        e2 := g.AddEdit("x" (cx + 88) " y" cy " w66", f[2])
-        c5 := g.AddCheckbox("x" (cx + 162) " y" (cy + 3) " w34", "")
+        e1 := fixed ? g.AddEdit("x" (cx + 30) " y" cy " w46 ReadOnly BackgroundEEEEEE", KeyLabel(f[1])) : g.AddEdit("x" (cx + 30) " y" cy " w46", f[1])
+        e2 := g.AddEdit("x" (cx + 80) " y" cy " w66", f[2])
+        c5 := g.AddCheckbox("x" (cx + 154) " y" (cy + 3) " w30", "")
         c5.Value := Trim(f[5]) = "1" ? 1 : 0
-        c6 := g.AddCheckbox("x" (cx + 200) " y" (cy + 3) " w110", "")
+        c6 := g.AddCheckbox("x" (cx + 212) " y" (cy + 3) " w98", "")
         c6.Value := Trim(f[6]) = "1" ? 1 : 0
         ; Map (không dùng object literal) vì SaveSettings/ListSkills truy cập bằng r["..."] - object thường không hỗ trợ []
         GuiCtl["rows"].Push(Map("e1", e1, "e2", e2, "c5", c5, "c6", c6, "c0", c0, "fixed", fx, "oldRow", f[3], "oldCol", f[4]))
     }
-    g.AddText("x20 y466 w650 cGray", "Phím/hàng/cột đã cố định theo 2 hàng phím. Chỉ cần điền cooldown + tick Bật.`nLặp = ấn lại dù chưa hết hồi chiêu. Không dừng V = vẫn giữ phím chính.`n2 dòng cuối cột phải: phím ngoài danh sách (chỉ dùng bộ đếm).")
+    g.AddText("x20 y512 w650 cGray", "Phím/hàng/cột đã cố định theo 2 hàng phím: chỉ cần điền Cooldown + tick Bật.`nẤn lặp = bỏ qua hồi chiêu đã nhập, ấn lại sau RepMin-RepMax ms (cấu hình ở thẻ Chung).`nKhông dừng main Skill = vẫn giữ phím chính khi dùng skill này. 2 dòng cuối cột phải: phím ngoài danh sách.")
     ; --- Nút điều khiển: luôn nằm ở đáy cửa sổ, ngoài các thẻ ---
     tab.UseTab(1)          ; hiện lại thẻ đầu khi mở bảng
     tab.UseTab()           ; không truyền số = các control sau thuộc về cửa sổ, toạ độ tuyệt đối
     g.AddButton("x16 y650 w110 Default", "LƯU").OnEvent("Click", SaveSettings)
-    g.AddButton("x+8 w140", "Màu chuẩn ô...").OnEvent("Click", (*) => ShowColorGui())
     g.AddButton("x+8 w140", "Mở HƯỚNG DẪN").OnEvent("Click", (*) => OpenGuide())
     g.AddButton("x+8 w110", "Đóng").OnEvent("Click", (*) => g.Hide())
     g.OnEvent("Close", (*) => g.Hide())
+    g.OnEvent("Escape", (*) => g.Hide())    ; Esc = đóng bảng, KHÔNG lưu (LƯU chỉ chạy khi bấm nút hoặc Enter)
     SettingsGui := g
     if Holding
         ReleaseMain()
@@ -1479,6 +1503,14 @@ SaveSettings(*) {
         MsgBox "Số dòng log tối đa phải là số nguyên từ 50 trở lên.", "Maple Auto", "Icon!"
         return
     }
+    if !IsNumber(Trim(GuiCtl["RelearnMin"].Value)) || Number(Trim(GuiCtl["RelearnMin"].Value)) < 0 {
+        MsgBox "'Coi là hồi chiêu quá lâu' phải là số phút không âm.", "Maple Auto", "Icon!"
+        return
+    }
+    if !IsNumber(Trim(GuiCtl["BlockMin"].Value)) || Number(Trim(GuiCtl["BlockMin"].Value)) < 0 || Number(Trim(GuiCtl["BlockMin"].Value)) > 120 {
+        MsgBox "'Ngừng ấn phím khi ấn mãi không ra' phải là số phút từ 0 đến 120.", "Maple Auto", "Icon!"
+        return
+    }
     if !IsInteger(Trim(GuiCtl["ReChannel"].Value)) || Integer(Trim(GuiCtl["ReChannel"].Value)) < 1 || Integer(Trim(GuiCtl["ReChannel"].Value)) > 30 {
         MsgBox "Kênh phải là số từ 1 đến 30.", "Maple Auto", "Icon!"
         return
@@ -1540,6 +1572,8 @@ SaveSettings(*) {
         IniWrite Trim(GuiCtl["RefH"].Value), IniFile, "Detect", "RefH"
         rl := Trim(GuiCtl["RelearnMin"].Value)
         IniWrite (IsNumber(rl) && Number(rl) >= 0 ? rl : "5"), IniFile, "Detect", "RelearnMin"
+        IniWrite (GuiCtl["Relearn"].Value ? "1" : "0"), IniFile, "Detect", "Relearn"
+        IniWrite (Trim(GuiCtl["BlockMin"].Value)), IniFile, "Detect", "BlockMin"
         IniWrite (GuiCtl["SlotScale"].Value = 2 ? "stretch" : GuiCtl["SlotScale"].Value = 3 ? "native" : "uniform"), IniFile, "Detect", "SlotScale"
         IniWrite (GuiCtl["MainMode"].Value = 2 ? "tap" : "hold"), IniFile, "General", "MainMode"
         IniWrite GuiCtl["UseSlotCheck"].Value, IniFile, "Detect", "UseSlotCheck"
@@ -1588,7 +1622,7 @@ SaveSettings(*) {
 }
 
 A_TrayMenu.Add()
-A_TrayMenu.Add("Cài đặt (F5)", ShowSettings)
+A_TrayMenu.Add("Cài đặt (F5)", ToggleSettings)
 A_TrayMenu.Add("Hướng dẫn", (*) => OpenGuide())
 if FirstRun
     SetTimer ShowSettings, -500
@@ -1622,7 +1656,7 @@ LogErr(e, mode) {
 try Hotkey("$" ToggleKey, (*) => ToggleAuto())
 catch
     MsgBox "Phím bắt đầu/tạm dừng '" ToggleKey "' không hợp lệ. Hãy sửa trong F5 hoặc settings.ini.", "Maple Auto", "Icon!"
-F5:: ShowSettings()
+F5:: ToggleSettings()
 
 ToggleAuto() {
     global Enabled, F1Count, UserPaused, StartTick, SeenGame, LostSince, RelogCancel
@@ -1940,28 +1974,53 @@ SlotState(s) {
     return SampleDist(cur, Base[key]) <= ReadyDist ? 1 : 0
 }
 
-; F2: hiện độ lệch màu của từng ô trong 8 giây
+; F2: bảng màu các ô quickslot trong 10 giây - XANH = sẵn sàng, ĐỎ = đang hồi chiêu
 DebugSlots() {
+    global Skills, Base, ReadyDist, SlotColorGui
+    if IsObject(SlotColorGui) {
+        try SlotColorGui.Destroy()
+        SlotColorGui := ""
+    }
     WinGetClientPos , , &cw, &ch, GameHwnd()
-    txt := "Vùng game: " cw "x" ch "  hệ số phóng: kx=" Round(ScaleX(cw, ch), 3) " ky=" Round(ScaleY(cw, ch), 3) "  (sẵn sàng nếu lệch <= " ReadyDist ")`n"
+    g := Gui("+AlwaysOnTop -Caption +Border +ToolWindow", "Màu ô quickslot")
+    g.SetFont("s10", "Segoe UI")
+    g.MarginX := 14, g.MarginY := 10
+    g.AddText("cBlack", "Vùng game " cw "x" ch "  kx=" Round(ScaleX(cw, ch), 3) " ky=" Round(ScaleY(cw, ch), 3) "  (sẵn sàng nếu lệch <= " ReadyDist ")")
+    nReady := 0, nCool := 0
     for s in Skills {
         if !s.Has("slot")
             continue
+        k := StrUpper(s["key"])
         cur := SlotSample(s)
-        txt .= StrUpper(s["key"]) ": "
         if !IsObject(cur) {
-            txt .= "LỖI không đọc được`n"
+            g.AddText("cGray", k ": LỖI không đọc được ô")
             continue
         }
         if !Base.Has(s["key"]) {
-            txt .= "chưa lưu màu chuẩn - F5 > Màu chuẩn > Lấy màu`n"
+            g.AddText("cGray", k ": chưa lưu màu chuẩn (thẻ Skill > Màu chuẩn ô)")
             continue
         }
         d := SampleDist(cur, Base[s["key"]])
-        txt .= "lệch=" Round(d) "  " (d <= ReadyDist ? "SẴN SÀNG" : "HỒI CHIÊU") "`n"
+        if d <= ReadyDist {
+            nReady += 1
+            g.AddText("cGreen", k ": SẴN SÀNG - lệch " Round(d))
+        } else {
+            nCool += 1
+            g.AddText("cRed", k ": HỒI CHIÊU - lệch " Round(d))
+        }
     }
-    ToolTip txt
-    SetTimer () => ToolTip(), -8000
+    g.AddText("cBlack", "Sẵn sàng: " nReady "   Hồi chiêu: " nCool "   (F2 lại để xem tiếp, tự đóng sau 10s)")
+    g.Show("AutoSize Center")
+    SlotColorGui := g
+    SetTimer CloseSlotColor, -10000
+}
+
+CloseSlotColor(*) {
+    global SlotColorGui
+    if IsObject(SlotColorGui) {
+        try SlotColorGui.Destroy()
+        SlotColorGui := ""
+    }
 }
 
 ; Ô đã rời màu hồi chiêu (khác cdSample) và giữ nguyên >= 2 giây -> lấy màu đó làm màu "sẵn sàng".
@@ -2232,7 +2291,7 @@ ScanSlots() {
 }
 
 ScanSlotsInner() {
-    global ScanMs, ScanAt, RelearnMs
+    global ScanMs, ScanAt, RelearnMs, RelearnOn, BlockMs, BlockMin, RelearnMin
     if !Enabled || Paused() || BuffBusy
         return
     if !IsGameActive() {
@@ -2264,7 +2323,7 @@ ScanSlotsInner() {
         ; Ô khác hẳn màu đó và giữ nguyên >= 2 giây mà mình không ấn -> đó là màu lúc SẴN SÀNG.
         ; Chưa biết màu hồi chiêu (cdSample trống) thì chỉ dám học khi bộ đếm đã quá hạn cooldown
         ; >= 10 giây - lúc đó chắc chắn ô không còn hồi chiêu nên không thể học nhầm.
-        if read && s["st"] = 0 && RelearnMs > 0 {
+        if RelearnOn && read && s["st"] = 0 && RelearnMs > 0 {
             overDue := s["press"] > 0 && t0 > s["press"] + s["cd"] * 1000 + 10000
             hadCd := IsObject(s["cdSample"])
             if hadCd ? (SampleDist(cur, s["cdSample"]) > VerifyDist) : overDue {
@@ -2287,7 +2346,7 @@ ScanSlotsInner() {
             if !s.Get("coolSince", 0)
                 s["coolSince"] := t0
             else if t0 - s["coolSince"] >= RelearnMs && !s.Get("stuckWarn", 0) {
-                if !IsObject(s["cdSample"]) {
+                if RelearnOn && !IsObject(s["cdSample"]) {
                     ; chưa biết màu lúc hồi chiêu -> ấn THỬ 1 lần để lấy mẫu (không ấn dồn dập, mỗi lần cách nhau RelearnMs)
                     s["probe"] := true
                     s["force"] := true
@@ -2296,8 +2355,11 @@ ScanSlotsInner() {
                     DLog("THỬ LẠI " StrUpper(s["key"]) ": ô bị coi là hồi chiêu > " Round(RelearnMs / 60000, 1) " phút nhưng CHƯA biết màu hồi chiêu -> ấn thử 1 lần để lấy mẫu màu hồi chiêu.")
                 } else {
                     s["stuckWarn"] := 1
-                    s["blocked"] := t0 + Max(600000, RelearnMs * 2)
-                    DLog("!!! KHÔNG ĐỌC ĐƯỢC Ô " StrUpper(s["key"]) ": bị coi là hồi chiêu > " Round(RelearnMs / 60000, 1) " phút -> TẠM NGỪNG ấn phím này " Round(Max(600000, RelearnMs * 2) / 60000) " phút để không bị đăng xuất. Mở F5 > Màu chuẩn ô > Lấy lại màu cho " StrUpper(s["key"]) ".")
+                    s["blocked"] := BlockMs > 0 ? t0 + BlockMs : 0
+                    if BlockMs > 0
+                        DLog("!!! KHÔNG ĐỌC ĐƯỢC Ô " StrUpper(s["key"]) ": bị coi là hồi chiêu > " Round(RelearnMs / 60000, 1) " phút -> TẠM NGỪNG ấn phím này " BlockMin " phút để không bị đăng xuất. Mở thẻ Skill > Màu chuẩn ô > Lấy lại màu cho " StrUpper(s["key"]) ".")
+                    else
+                        DLog("!!! KHÔNG ĐỌC ĐƯỢC Ô " StrUpper(s["key"]) ": bị coi là hồi chiêu > " Round(RelearnMs / 60000, 1) " phút nhưng 'ngừng ấn' đang đặt 0 phút -> vẫn ấn theo bộ đếm. Mở thẻ Skill > Màu chuẩn ô > Lấy lại màu cho " StrUpper(s["key"]) ".")
                 }
             }
         } else if read && s["st"] = 1 {
@@ -2479,7 +2541,7 @@ ColorReady(s, now) {
 }
 
 CheckVerify() {
-    global VerifyOk, VerifyFail, VerifyOkAt
+    global VerifyOk, VerifyFail, VerifyOkAt, BlockMs, BlockMin
     for s in Skills {
         if s.Get("cdAt", 0) && A_TickCount >= s["cdAt"] {
             s["cdAt"] := 0
@@ -2530,9 +2592,12 @@ CheckVerify() {
             ; giãn cách tăng dần: ấn dồn dập khi ô đọc sai dễ bị đăng xuất
             s["next"] := A_TickCount + (s["fails"] <= MaxRetry ? RetryGapMs : Min(300000, SlowRetryMs * (2 ** Min(s["fails"] - MaxRetry, 4))))
             if s["fails"] >= 5 {
-                s["blocked"] := A_TickCount + 600000
+                s["blocked"] := BlockMs > 0 ? A_TickCount + BlockMs : 0
                 s["retries"] := 0
-                DLog("!!! TẠM NGỪNG ẤN " StrUpper(s["key"]) ": " s["fails"] " lần ấn liên tiếp KHÔNG ra skill -> dừng ấn phím này 10 phút để tránh bị đăng xuất. Kiểm tra phím/ô của " StrUpper(s["key"]) " trong F5.")
+                if BlockMs > 0
+                    DLog("!!! TẠM NGỪNG ẤN " StrUpper(s["key"]) ": " s["fails"] " lần ấn liên tiếp KHÔNG ra skill -> dừng ấn phím này " BlockMin " phút để tránh bị đăng xuất. Kiểm tra phím/ô của " StrUpper(s["key"]) " ở thẻ Skill.")
+                else
+                    DLog("!!! " StrUpper(s["key"]) ": " s["fails"] " lần ấn liên tiếp KHÔNG ra skill nhưng 'ngừng ấn' đang đặt 0 phút -> vẫn ấn tiếp theo bộ đếm. Kiểm tra phím/ô của " StrUpper(s["key"]) " ở thẻ Skill.")
             }
         } else {
             s["retries"] := 0

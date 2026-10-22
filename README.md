@@ -162,9 +162,9 @@ Trong Sandbox, mở `Desktop\CleanSetupv412\AHK\` và chạy `start_v1.cmd`:
 |---|---|
 | **F1** | Bật / Tạm dừng / Tiếp tục auto *(có thể đổi trong F5)* |
 | **Ctrl+F1** | Dừng khẩn cấp, nhả phím, thoát script |
-| **F2** | Xem độ lệch màu ô Quickslot (debug, 8 giây) |
+| **F2** | Bảng màu ô Quickslot (10 giây): **xanh = sẵn sàng**, **đỏ = hồi chiêu**, xám = chưa lưu màu chuẩn |
 | **F4** | Bật/tắt HUD trạng thái (tooltip góc màn hình) |
-| **F5** | Mở cửa sổ **Cài đặt** |
+| **F5** | Bật/tắt cửa sổ **Cài đặt** (bấm lần nữa để ẩn; **Esc** = đóng KHÔNG lưu) |
 | **F6** | Debug nhận diện bảng Buff (xem loại bảng + vị trí nút) |
 | **F7** | Thử bấm nút `Use Unapplied Buffs` bằng 5 cách khác nhau |
 | **F9** | Chạy thử quy trình **Tự đăng nhập lại** |
@@ -282,6 +282,8 @@ QS_Y2=29            ; hàng dưới cách mép dưới (px)
 ReadyDist=45        ; ngưỡng lệch màu để coi là "sẵn sàng"
 BatchCapture=1      ; 1 = chụp gộp dải ô 1 lần (nhanh hơn nhiều trong Sandbox)
 RelearnMin=5        ; ô bị coi là "hồi chiêu" quá chừng này phút -> tạm ngừng ấn phím đó + cảnh báo (0 = tắt)
+Relearn=0           ; 1 = BẬT tự học lại màu ô (BETA, tick trong thẻ Skill) | 0 = tắt
+BlockMin=10         ; ấn mãi không ra / ô đọc sai -> tạm ngừng ấn riêng phím đó chừng này phút (0 = không bao giờ ngừng)
 ```
 
 **Tự học lại màu ô + chống ấn dồn dập (`RelearnMin`).** Màu chuẩn của ô được lưu lúc còn ở một
@@ -299,12 +301,12 @@ theo các lớp sau. Trên HUD: `<phím>⛔` = phím đang bị tạm ngừng �
 2. **Chưa biết màu hồi chiêu** (skill chưa từng ấn ra lần nào): quá `RelearnMin` phút → ấn **thử 1
    lần** để lấy mẫu màu hồi chiêu (log `THỬ LẠI <phím>: ... ấn thử 1 lần ...`), không thử lại dồn dập.
 3. **Ô bị coi là hồi chiêu quá `RelearnMin` phút** (mặc định **5**; đã biết màu hồi chiêu): **không**
-   ấn phím đó nữa trong 10 phút, HUD hiện `<phím>⛔`, log
+   ấn phím đó nữa trong `BlockMin` phút (mặc định **10**, đặt **0** = không bao giờ ngừng), HUD hiện `<phím>⛔`, log
    `!!! KHÔNG ĐỌC ĐƯỢC Ô <phím>: ... Mở F5 > Màu chuẩn ô > Lấy lại màu cho <phím>`. Ô hoạt động lại
    ngay khi bạn lấy lại màu trong F5, hoặc khi script tự học được màu mới (lớp 1).
 4. **Ấn mãi không ra skill** (`✗` nhiều lần): giãn cách ấn **1,2 giây** cho 3 lần đầu, sau đó tăng gấp đôi
    mỗi lần (30s → 60s → 120s → 240s), chặn trên **5 phút**; **5 lần liên tiếp ✗** → tạm ngừng phím đó
-   10 phút (`!!! TẠM NGỪNG ẤN <phím>`). `✓` reset bộ đếm. Lần **ấn thử** (lớp 2) không tính vào bộ đếm
+   `BlockMin` phút (`!!! TẠM NGỪNG ẤN <phím>`). `✓` reset bộ đếm. Lần **ấn thử** (lớp 2) không tính vào bộ đếm
    này, nên không bao giờ ấn dồn dập. Nếu vẫn còn skill khác `✓` trong 2 phút qua thì **không** chạy quy
    trình đăng nhập lại (tránh đăng xuất oan).
 5. **Ô "kẹt" — hết hồi chiêu theo bộ đếm mà ô vẫn báo hồi chiêu:** vẫn ấn theo **bộ đếm cooldown**
@@ -315,8 +317,11 @@ theo các lớp sau. Trên HUD: `<phím>⛔` = phím đang bị tạm ngừng �
 6. **Hết hạn tạm ngừng** (lớp 3, 4): tự xoá cờ, quên `cdSample` cũ và thử lại; log
    `HẾT TẠM NGỪNG <phím>: thử lại phím này ...`.
 
-Đặt `RelearnMin=0` để tắt lớp 2 và 3 (vẫn giữ lớp 1, 4, 5; muốn lấy lại màu bằng tay thì dùng nút
-**Màu chuẩn ô**).
+Toàn bộ phần **tự học lại màu** (lớp 1 + 2) là tính năng **BETA**, mặc định **TẮT**: bật bằng checkbox
+**Tự học lại màu ô (BETA)** ở đầu thẻ Skill (hoặc `Detect > Relearn=1`). Khi tắt, script **không** tự đổi
+màu chuẩn; vẫn giữ lớp 3-6 (chống ấn dồn dập + tạm ngừng phím).
+
+Đặt `RelearnMin=0` để tắt lớp 2 và 3. Muốn lấy lại màu bằng tay thì dùng nút **Màu chuẩn ô** trong thẻ Skill.
 
 Mọi số px trong ini (QS_*, BandPts, điểm dò bảng buff, BtnDX/BtnDY, vùng đã khoanh) đều được
 hiểu là px tại khung `RefW x RefH`. Khi cửa sổ game to/nhỏ hơn, script tự nhân hệ số theo trục:
@@ -329,8 +334,10 @@ hiểu là px tại khung `RefW x RefH`. Khi cửa sổ game to/nhỏ hơn, scri
 ## 🖥️ Cửa sổ Cài đặt (F5)
 
 Bảng cài đặt đồ họa chia thành **4 thẻ (tab)** để không phải cuộn: **Chung / Skill / Buff / Đăng nhập lại**.
-Bốn nút **LƯU**, **Màu chuẩn ô**, **Mở HƯỚNG DẪN**, **Đóng** nằm **cố định ở đáy cửa sổ**, không thuộc thẻ nào —
+Ba nút **LƯU**, **Mở HƯỚNG DẪN**, **Đóng** nằm **cố định ở đáy cửa sổ**, không thuộc thẻ nào —
 bấm được ở mọi thẻ, không bị cắt khi cửa sổ nhỏ. Cửa sổ mở ở kích thước cố định 732×676.
+
+**F5** bật/tắt bảng; **Esc** hoặc nút **Đóng** = đóng mà **không lưu**. Chỉ **LƯU** (hoặc Enter) mới ghi `settings_v1.ini`.
 
 ### Thẻ Chung
 - Phím bắt đầu/tạm dừng, phím skill chính, chế độ ấn (giữ / ấn nhả)
@@ -340,7 +347,7 @@ bấm được ở mọi thẻ, không bị cắt khi cửa sổ nhỏ. Cửa s�
 - Nút **Đặt lại thời gian**, tuỳ chọn Debug
 
 ### Thẻ Skill
-- Bảng 34 dòng với **phím cố định** theo 2 hàng mặc định — chỉ hiện 5 cột: **Bật / Phím / Cooldown / Lặp / Không dừng V** (không còn cột hàng ô, cột ô):
+- Bảng 34 dòng với **phím cố định** theo 2 hàng mặc định — chỉ hiện 5 cột: **Bật / Phím / Cooldown (giây) / Ấn lặp (bỏ hồi chiêu) / Không dừng main Skill**:
   - hàng 1 → ô quickslot hàng trên: `Q W E R T 1 2 3 4 5 6 7 8 9 O P`
   - hàng 2 → ô quickslot hàng dưới: `A S D F Ctrl Alt Z X C U I J K L N M`
 - Cột **Phím** chỉ đọc (nền xám) — không sửa được, script tự tính hàng/cột ô quickslot. `Ctrl` lưu thành `control` (tên phím AHK).
@@ -363,8 +370,8 @@ bấm được ở mọi thẻ, không bị cắt khi cửa sổ nhỏ. Cửa s�
 
 ### Các nút cố định ở đáy
 - **LƯU** (mặc định, Enter) — lưu tất cả, đọc lại INI để xác minh rồi tự reload script. Nếu ghi thất bại sẽ hiện hộp thoại báo lỗi thay vì im lặng.
-- **Màu chuẩn ô** — lấy/lưu màu chuẩn từng ô Quickslot
 - **Mở HƯỚNG DẪN** — mở HUONG_DAN.txt
+- **Đóng** — đóng cửa sổ, **không lưu** (giống Esc)
 
 ---
 
@@ -407,8 +414,8 @@ Ghi mọi sự kiện khi `Debug > Enabled = 1` (bật trong F5):
 | `TỔNG` | Cộng dồn mỗi 30 giây: kiểm tra skill ✓/✗, số lần tự học lại màu ô, số lần cửa sổ đổi, có cảnh báo hay không |
 | `TỰ HỌC LẠI MÀU` | Ô đã rời màu hồi chiêu ≥ 2 giây trong khi vẫn bị coi là "hồi chiêu" → đã cập nhật màu chuẩn (ghi rõ màu cũ/mới) |
 | `THỬ LẠI` | Ô bị coi là hồi chiêu quá `RelearnMin` phút nhưng chưa biết màu hồi chiêu → ấn thử 1 lần để lấy mẫu |
-| `!!! KHÔNG ĐỌC ĐƯỢC Ô` | Ô bị coi là hồi chiêu quá `RelearnMin` phút và đã biết màu hồi chiêu → tạm ngừng ấn phím đó 10 phút |
-| `!!! TẠM NGỪNG ẤN` | 5 lần ấn liên tiếp kiểm tra `✗` → tạm ngừng ấn phím đó 10 phút |
+| `!!! KHÔNG ĐỌC ĐƯỢC Ô` | Ô bị coi là hồi chiêu quá `RelearnMin` phút và đã biết màu hồi chiêu → tạm ngừng ấn phím đó `BlockMin` phút |
+| `!!! TẠM NGỪNG ẤN` | 5 lần ấn liên tiếp kiểm tra `✗` → tạm ngừng ấn phím đó `BlockMin` phút |
 | `Ô KẸT` | Hết cooldown theo bộ đếm mà ô vẫn báo hồi chiêu → ấn theo bộ đếm (mỗi lần cách nhau ≥ cooldown + 3s) |
 | `MÀU CHUẨN SAI` | Chưa biết màu hồi chiêu, ô quá cooldown > 10s mà vẫn báo hồi chiêu → lấy màu hiện tại làm màu sẵn sàng |
 | `HẾT TẠM NGỪNG` | Hết 10 phút tạm ngừng → xoá cờ, quên màu hồi chiêu cũ và thử lại phím đó |
